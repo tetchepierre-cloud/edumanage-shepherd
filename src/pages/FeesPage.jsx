@@ -167,28 +167,21 @@ export default function FeesPage() {
   }
 
   const openAddForm = async () => {
-    setEditPayment(null)
-    let newReceipt = ''
-    try {
-      newReceipt = await generateReceiptNumber()
-    } catch (_) {
-      const d = new Date()
-      newReceipt = `PAY${d.getFullYear()}0001${['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][d.getMonth()]}`
-    }
-    setForm({
-      student_id:     '',
-      amount:         '',
-      payment_type:   'Tuition',
-      payment_method: 'Cash',
-      receipt_number: newReceipt,
-      status:         'paid',
-      academic_year:  '2024/2025',
-      term:           'Term 1',
-      notes:          '',
-    })
-    setMessage('')
-    setShowForm(true)
-  }
+  setEditPayment(null)
+  setForm({
+    student_id:     '',
+    amount:         '',
+    payment_type:   'Tuition',
+    payment_method: 'Cash',
+    receipt_number: '',
+    status:         'paid',
+    academic_year:  '2025/2026',
+    term:           'Term 1',
+    notes:          '',
+  })
+  setMessage('')
+  setShowForm(true)
+}
 
   const openEditForm = (payment) => {
     setEditPayment(payment)
@@ -263,17 +256,20 @@ export default function FeesPage() {
       return
     }
 
-    const payload = {
-      student_id:     form.student_id,
-      amount:         parseFloat(form.amount),
-      payment_type:   form.payment_type,
-      payment_method: form.payment_method,
-      receipt_number: form.receipt_number.trim(),
-      status:         form.status,
-      academic_year:  form.academic_year,
-      term:           form.term,
-      notes:          form.notes.trim() || null,
-    }
+    const receiptNum = editPayment ? form.receipt_number.trim() : await generateReceiptNumber()
+console.log('RECEIPT NUMBER GENERATED:', receiptNum)
+
+const payload = {
+  student_id:     form.student_id,
+  amount:         parseFloat(form.amount),
+  payment_type:   form.payment_type,
+  payment_method: form.payment_method,
+  receipt_number: receiptNum,
+  status:         form.status,
+  academic_year:  form.academic_year,
+  term:           form.term,
+  notes:          form.notes.trim() || null,
+}
 
     try {
       if (editPayment) {
@@ -615,7 +611,7 @@ export default function FeesPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Number</label>
-                <input type="text" value={form.receipt_number} onChange={e => setForm(f => ({ ...f, receipt_number: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono" />
+                <input type="text" value={form.receipt_number} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono bg-gray-50 text-gray-500 cursor-not-allowed" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>

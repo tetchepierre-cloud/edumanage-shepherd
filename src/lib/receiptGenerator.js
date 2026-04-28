@@ -60,32 +60,11 @@ function fmtDate(d) {
     + ' — ' + dt.toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit' })
 }
 
-// ── Générer N° reçu auto‑incrémenté depuis la base ────────────────────────────
+// ── Générer N° reçu auto‑incrémenté depuis la base (corrigé) ─────────────────
 export async function generateReceiptNumber() {
-  const d = new Date()
-  const year = d.getFullYear()
-  const mon  = MONTHS[d.getMonth()]
-  const prefix = `PAY${year}`
-
-  // Récupère le dernier numéro de l'année en cours
-  const { data, error } = await supabase
-    .from('fee_payments')
-    .select('receipt_number')
-    .like('receipt_number', `${prefix}%`)
-    .order('receipt_number', { ascending: false })
-    .limit(1)
-
-  let nextSeq = 1
-  if (data && data.length > 0) {
-    const last = data[0].receipt_number // ex: PAY20250012JAN
-    const match = last.match(/PAY\d{4}(\d{4})/)
-    if (match) {
-      nextSeq = parseInt(match[1], 10) + 1
-    }
-  }
-
-  const seq = String(nextSeq).padStart(4, '0')
-  return `${prefix}${seq}${mon}`
+  const { data, error } = await supabase.rpc('next_receipt_number')
+  if (error) throw error
+  return data
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -105,7 +84,7 @@ export async function printReceipt(payment, schoolConfig = {}) {
   const student     = payment.students || {}
   const className   = student.classes?.name || student.class_name || '—'
   const studentName = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '—'
-  const receiptNo   = payment.receipt_number || (await generateReceiptNumber())
+  const receiptNo = payment.receipt_number
   const payDate     = fmtDate(payment.created_at)
   const term        = payment.term        || '—'
   const year        = payment.academic_year || '—'
@@ -144,7 +123,6 @@ export async function printReceipt(payment, schoolConfig = {}) {
     try {
       doc.addImage(school.logo, 'PNG', M, 5, 16, 16)
     } catch (_) {
-      // fallback placeholder en cas d'erreur
       doc.setDrawColor(...WHITE)
       doc.setLineWidth(0.3)
       doc.roundedRect(M, 5, 16, 16, 2, 2, 'S')
@@ -282,8 +260,6 @@ export async function printReceipt(payment, schoolConfig = {}) {
   if (printWindow) {
     printWindow.onload = () => {
       printWindow.print()
-      // Nettoyage après impression (optionnel)
-      // URL.revokeObjectURL(url) sera fait après fermeture
     }
   } else {
     // Fallback : téléchargement forcé
