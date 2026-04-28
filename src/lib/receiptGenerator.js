@@ -1,20 +1,21 @@
 // src/lib/receiptGenerator.js
 // Génère un reçu de paiement PDF A5 directement dans le navigateur
-// Utilise jsPDF installé localement (npm install jspdf)
 // Format N° reçu : PAYAAAANNNNmmm ex: PAY20260001JAN
 
 import { jsPDF } from 'jspdf'
 import { supabase } from './supabase'
 
-// ── Constantes de mise en page A5 ────────────────────────────────────────────
-const A5_W = 148   // mm
-const A5_H = 210   // mm
-const M    = 10    // marge gauche/droite
-const CW   = A5_W - M * 2  // largeur contenu
+// ── Mise en page A5 ───────────────────────────────────────────────────────────
+const A5_W = 148
+const A5_H = 210
+const M    = 10
+const CW   = A5_W - M * 2
 
-// ── Couleurs ─────────────────────────────────────────────────────────────────
+// ── Couleurs ──────────────────────────────────────────────────────────────────
 const BLUE   = [30, 77, 145]
+const BLUE_L = [214, 228, 247]
 const LGRAY  = [245, 247, 250]
+const MGRAY  = [226, 232, 240]
 const DGRAY  = [107, 114, 128]
 const BLACK  = [17, 24, 39]
 const GREEN  = [22, 101, 52]
@@ -22,37 +23,37 @@ const GBG    = [220, 252, 231]
 const AMBER  = [146, 64, 14]
 const ABGC   = [254, 243, 199]
 const WHITE  = [255, 255, 255]
+const GOLD   = [255, 215, 0]
 
-// ── Helper : rectangle avec fond ─────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fillRect(doc, x, y, w, h, color) {
   doc.setFillColor(...color)
   doc.rect(x, y, w, h, 'F')
 }
 
-// ── Helper : texte avec couleur ───────────────────────────────────────────────
+function strokeRect(doc, x, y, w, h, color, lw = 0.2) {
+  doc.setDrawColor(...color)
+  doc.setLineWidth(lw)
+  doc.rect(x, y, w, h, 'S')
+}
+
 function text(doc, str, x, y, opts = {}) {
   doc.setTextColor(...(opts.color || BLACK))
   doc.setFontSize(opts.size || 9)
   doc.setFont('helvetica', opts.style || 'normal')
-  doc.text(String(str), x, y, { align: opts.align || 'left', maxWidth: opts.maxWidth })
+  doc.text(String(str ?? ''), x, y, { align: opts.align || 'left', maxWidth: opts.maxWidth })
 }
 
-// ── Helper : ligne horizontale ────────────────────────────────────────────────
-function line(doc, y, color = [220, 220, 220]) {
+function hline(doc, y, color = MGRAY, lw = 0.2) {
   doc.setDrawColor(...color)
-  doc.setLineWidth(0.2)
+  doc.setLineWidth(lw)
   doc.line(M, y, A5_W - M, y)
 }
 
-// ── Formater les mois ─────────────────────────────────────────────────────────
-const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
-
-// ── Formater montant ──────────────────────────────────────────────────────────
 function fmtGHS(n) {
   return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', { minimumFractionDigits: 2 })
 }
 
-// ── Formater date ─────────────────────────────────────────────────────────────
 function fmtDate(d) {
   if (!d) return '—'
   const dt = new Date(d)
@@ -60,11 +61,22 @@ function fmtDate(d) {
     + ' — ' + dt.toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit' })
 }
 
-// ── Générer N° reçu auto‑incrémenté depuis la base (corrigé) ─────────────────
+// ── Générer N° reçu ───────────────────────────────────────────────────────────
 export async function generateReceiptNumber() {
   const { data, error } = await supabase.rpc('next_receipt_number')
   if (error) throw error
   return data
+}
+
+// ── Historique paiements élève pour l'année ───────────────────────────────────
+async function getStudentPaymentHistory(studentId, academicYear) {
+  const { data } = await supabase
+    .from('fee_payments')
+    .select('amount, payment_type, status')
+    .eq('student_id', studentId)
+    .eq('academic_year', academicYear)
+    .in('status', ['paid', 'partial'])
+  return data || []
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -74,187 +86,226 @@ export async function printReceipt(payment, schoolConfig = {}) {
   const doc = new jsPDF({ unit: 'mm', format: 'a5', orientation: 'portrait' })
 
   const school = {
-    name:    schoolConfig.school_name    || 'BRIGHT FUTURE SCHOOL',
-    address: schoolConfig.address        || 'Tamale, Northern Region',
-    phone:   schoolConfig.phone          || '+233 20 000 0000',
-    email:   schoolConfig.email          || '',
-    logo:    schoolConfig.logo           || null,   // URL ou base64
+    name:    (schoolConfig.school_name || 'BRIGHT FUTURE SCHOOL').toUpperCase(),
+    address: schoolConfig.address || 'Tamale, Northern Region',
+    phone:   schoolConfig.phone   || '+233 20 000 0000',
+    email:   schoolConfig.email   || '',
   }
 
-  const student     = payment.students || {}
-  const className   = student.classes?.name || student.class_name || '—'
-  const studentName = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '—'
-  const receiptNo = payment.receipt_number
-  const payDate     = fmtDate(payment.created_at)
-  const term        = payment.term        || '—'
-  const year        = payment.academic_year || '—'
-  const method      = payment.payment_method || 'Cash'
-  const status      = payment.status        || 'paid'
-  const notes       = payment.notes         || ''
+  const student         = payment.students || {}
+  const className       = student.classes?.name || '—'
+  const studentName     = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '—'
+  const receiptNo       = payment.receipt_number
+  const payDate         = fmtDate(payment.created_at)
+  const term            = payment.term           || '—'
+  const year            = payment.academic_year  || '—'
+  const method          = payment.payment_method || 'Cash'
+  const status          = payment.status         || 'paid'
+  const notes           = payment.notes          || ''
+  const amountPaidToday = parseFloat(payment.amount || 0)
+  const paymentType     = payment.payment_type   || 'Tuition'
 
-  // Prépare les lignes de frais (multi‑frais si fourni)
-  let feeItems = []
-  if (Array.isArray(payment.feeItems) && payment.feeItems.length > 0) {
-    feeItems = payment.feeItems.map(item => ({
-      description: item.description,
-      expected:    parseFloat(item.expected || 0),
-      paid:        parseFloat(item.paid || 0),
-    }))
-  } else {
-    // Fallback : une seule ligne avec le montant payé
-    feeItems = [{
-      description: payment.payment_type + ' — ' + term + ' (' + year + ')',
-      expected:    parseFloat(payment.amount || 0),
-      paid:        parseFloat(payment.amount || 0),
-    }]
-  }
+  // ── Fee structure (prestations annuelles) ────────────────────────────────
+  const feeStructure = Array.isArray(payment.feeItems) && payment.feeItems.length > 0
+    ? payment.feeItems
+    : []
 
-  const totalExpected = feeItems.reduce((s, i) => s + i.expected, 0)
-  const totalPaid     = feeItems.reduce((s, i) => s + i.paid, 0)
-  const balance       = totalExpected - totalPaid
+  // Prestations avec montant annuel
+  const feeTypes = feeStructure.map(f => ({
+    label:  f.description.split(' (')[0],
+    type:   f.description.match(/\(([^)]+)\)/)?.[1] || f.description.split(' (')[0],
+    annual: parseFloat(f.expected || 0),
+  }))
+
+  // ── Historique complet des paiements de l'élève ──────────────────────────
+  const history = await getStudentPaymentHistory(payment.student_id, year)
+
+  // Total payé par type (insensible à la casse)
+  const paidByType = {}
+  history.forEach(p => {
+    const key = (p.payment_type || '').toLowerCase()
+    paidByType[key] = (paidByType[key] || 0) + parseFloat(p.amount || 0)
+  })
+
+  const totalAnnualDue = feeTypes.reduce((s, ft) => s + ft.annual, 0)
+  const totalPaidAll   = history.reduce((s, p) => s + parseFloat(p.amount || 0), 0)
+  const totalBalance   = Math.max(0, totalAnnualDue - totalPaidAll)
 
   let y = 0
 
-  // ── 1. HEADER BLEU ───────────────────────────────────────────────────────
-  fillRect(doc, 0, 0, A5_W, 32, BLUE)
+  // ════════════════════════════════════════════════════════════════════════
+  // 1. HEADER BLEU
+  // ════════════════════════════════════════════════════════════════════════
+  fillRect(doc, 0, 0, A5_W, 30, BLUE)
+  doc.setFillColor(...WHITE)
+  doc.circle(M + 7, 15, 6, 'F')
+  text(doc, '🏫', M + 3.5, 17, { size: 9, color: BLUE })
+  text(doc, school.name, M + 18, 10, { size: 10, style: 'bold', color: WHITE })
+  text(doc, school.address + (school.phone ? '  |  Tel: ' + school.phone : ''), M + 18, 16, { size: 7, color: [180, 210, 245] })
+  if (school.email) text(doc, school.email, M + 18, 22, { size: 6.5, color: [180, 210, 245] })
+  text(doc, 'OFFICIAL PAYMENT RECEIPT', A5_W - M, 26, { size: 7.5, style: 'bold', color: GOLD, align: 'right' })
+  y = 34
 
-  // Logo
-  if (school.logo) {
-    try {
-      doc.addImage(school.logo, 'PNG', M, 5, 16, 16)
-    } catch (_) {
-      doc.setDrawColor(...WHITE)
-      doc.setLineWidth(0.3)
-      doc.roundedRect(M, 5, 16, 16, 2, 2, 'S')
-      text(doc, '🏫', M + 8, 15, { size: 14, color: WHITE, align: 'center' })
-    }
-  } else {
-    doc.setDrawColor(...WHITE)
-    doc.setLineWidth(0.3)
-    doc.roundedRect(M, 5, 16, 16, 2, 2, 'S')
-    text(doc, '🏫', M + 8, 15, { size: 14, color: WHITE, align: 'center' })
-  }
+  // ════════════════════════════════════════════════════════════════════════
+  // 2. BANDE N° REÇU
+  // ════════════════════════════════════════════════════════════════════════
+  fillRect(doc, 0, y, A5_W, 8, BLUE_L)
+  text(doc, 'Receipt No.:', M, y + 5.5, { size: 7.5, style: 'bold', color: BLUE })
+  text(doc, receiptNo, M + 21, y + 5.5, { size: 8.5, style: 'bold', color: BLUE })
+  text(doc, 'Date: ' + payDate, A5_W - M, y + 5.5, { size: 7, color: BLACK, align: 'right' })
+  y += 11
 
-  // Nom école
-  text(doc, school.name.toUpperCase(), M + 22, 11, { size: 11, style: 'bold', color: WHITE })
-  text(doc, school.address, M + 22, 16, { size: 8, color: [180, 210, 245] })
-  if (school.phone) text(doc, 'Tel: ' + school.phone, M + 22, 21, { size: 8, color: [180, 210, 245] })
-  if (school.email) text(doc, school.email, M + 22, 26, { size: 7, color: [180, 210, 245] })
-
-  // Titre RECEIPT
-  text(doc, 'OFFICIAL PAYMENT RECEIPT', A5_W - M, 28, { size: 8, style: 'bold', color: [255, 215, 0], align: 'right' })
-
-  y = 36
-
-  // ── 2. BANDE N° REÇU ────────────────────────────────────────────────────
-  fillRect(doc, 0, y, A5_W, 9, [214, 228, 247])
-  text(doc, 'Receipt No.:', M, y + 6, { size: 8, style: 'bold', color: BLUE })
-  text(doc, receiptNo, M + 22, y + 6, { size: 9, style: 'bold', color: BLUE })
-  text(doc, 'Date: ' + payDate, A5_W - M, y + 6, { size: 7.5, color: BLACK, align: 'right' })
-  y += 13
-
-  // ── 3. INFOS ÉLÈVE ───────────────────────────────────────────────────────
-  fillRect(doc, M, y, CW, 28, LGRAY)
-  doc.setDrawColor(200, 210, 225)
-  doc.setLineWidth(0.2)
-  doc.rect(M, y, CW, 28, 'S')
-
+  // ════════════════════════════════════════════════════════════════════════
+  // 3. INFOS ÉLÈVE
+  // ════════════════════════════════════════════════════════════════════════
+  fillRect(doc, M, y, CW, 24, LGRAY)
+  strokeRect(doc, M, y, CW, 24, [200, 210, 225])
   const col2 = M + CW / 2 + 2
-  const infoItems = [
-    ['Student',       studentName,  'Academic Year', year],
-    ['Student ID',    payment.student_id?.slice(0,8)?.toUpperCase() || '—', 'Term', term],
-    ['Class',         className,    'Payment Method', method],
+  const infoRows = [
+    ['Student',    studentName,  'Academic Year', year],
+    ['Student ID', payment.student_id?.slice(0,8)?.toUpperCase() || '—', 'Term', term],
+    ['Class',      className,    'Method',        method],
   ]
-
   let iy = y + 6
-  infoItems.forEach(([l1, v1, l2, v2]) => {
-    text(doc, l1 + ':', M + 2, iy, { size: 7.5, style: 'bold', color: DGRAY })
-    text(doc, v1, M + 22, iy, { size: 8, color: BLACK })
-    text(doc, l2 + ':', col2, iy, { size: 7.5, style: 'bold', color: DGRAY })
-    text(doc, v2, col2 + 22, iy, { size: 8, color: BLACK })
-    iy += 8
+  infoRows.forEach(([l1, v1, l2, v2]) => {
+    text(doc, l1 + ':', M + 2, iy, { size: 7, style: 'bold', color: DGRAY })
+    text(doc, v1, M + 19, iy, { size: 7.5, color: BLACK })
+    text(doc, l2 + ':', col2, iy, { size: 7, style: 'bold', color: DGRAY })
+    text(doc, v2, col2 + 19, iy, { size: 7.5, color: BLACK })
+    iy += 7
   })
-  y += 32
+  y += 27
 
-  // ── 4. TABLEAU DÉTAIL DES FRAIS (multi‑frais) ────────────────────────────
-  // En-tête tableau
-  fillRect(doc, M, y, CW, 7, BLUE)
-  text(doc, 'Description', M + 2, y + 5, { size: 8, style: 'bold', color: WHITE })
-  text(doc, 'Expected', A5_W - M - 32, y + 5, { size: 8, style: 'bold', color: WHITE, align: 'right' })
-  text(doc, 'Paid', A5_W - M - 2, y + 5, { size: 8, style: 'bold', color: WHITE, align: 'right' })
-  y += 7
+  // ════════════════════════════════════════════════════════════════════════
+  // 4. CE PAIEMENT AUJOURD'HUI (taille normale)
+  // ════════════════════════════════════════════════════════════════════════
+  text(doc, 'THIS PAYMENT', M, y + 4, { size: 7.5, style: 'bold', color: BLUE })
+  y += 6
 
-  // Lignes des frais
-  feeItems.forEach((item, idx) => {
-    const bgColor = idx % 2 === 0 ? WHITE : [250, 250, 252]
-    fillRect(doc, M, y, CW, 7, bgColor)
-    doc.setDrawColor(230, 230, 235)
-    doc.rect(M, y, CW, 7, 'S')
-    text(doc, item.description, M + 2, y + 5, { size: 8, color: BLACK })
-    text(doc, fmtGHS(item.expected), A5_W - M - 32, y + 5, { size: 8, color: BLACK, align: 'right' })
-    text(doc, fmtGHS(item.paid), A5_W - M - 2, y + 5, { size: 8, style: 'bold', color: BLACK, align: 'right' })
-    y += 7
-  })
+  // En-tête
+  fillRect(doc, M, y, CW, 6.5, BLUE)
+  text(doc, 'Description', M + 2, y + 4.5, { size: 8, style: 'bold', color: WHITE })
+  text(doc, 'Amount Paid', A5_W - M - 2, y + 4.5, { size: 8, style: 'bold', color: WHITE, align: 'right' })
+  y += 6.5
 
-  // Ligne TOTAL
-  const totBg = status === 'paid' ? GBG : (status === 'partial' ? ABGC : [254, 226, 226])
-  const totColor = status === 'paid' ? GREEN : (status === 'partial' ? AMBER : [153, 27, 27])
-  fillRect(doc, M, y, CW, 9, totBg)
-  doc.setDrawColor(...totColor)
-  doc.rect(M, y, CW, 9, 'S')
-  text(doc, 'TOTAL', M + 2, y + 6.5, { size: 9, style: 'bold', color: totColor })
-  text(doc, fmtGHS(totalExpected), A5_W - M - 32, y + 6.5, { size: 9, style: 'bold', color: totColor, align: 'right' })
-  text(doc, fmtGHS(totalPaid), A5_W - M - 2, y + 6.5, { size: 10, style: 'bold', color: totColor, align: 'right' })
+  // Ligne paiement
+  fillRect(doc, M, y, CW, 8, WHITE)
+  strokeRect(doc, M, y, CW, 8, MGRAY)
+  text(doc, paymentType + ' — ' + term + ' (' + year + ')', M + 2, y + 5.5, { size: 9, color: BLACK })
+  text(doc, fmtGHS(amountPaidToday), A5_W - M - 2, y + 5.5, { size: 9, style: 'bold', color: BLACK, align: 'right' })
+  y += 8
+
+  // Total today
+  const todayBg  = status === 'paid' ? GBG : ABGC
+  const todayCol = status === 'paid' ? GREEN : AMBER
+  fillRect(doc, M, y, CW, 9, todayBg)
+  strokeRect(doc, M, y, CW, 9, todayCol, 0.4)
+  text(doc, status === 'paid' ? '✓  FULLY PAID' : '⚠  PARTIAL PAYMENT',
+    M + 2, y + 6, { size: 9, style: 'bold', color: todayCol })
+  text(doc, fmtGHS(amountPaidToday), A5_W - M - 2, y + 6,
+    { size: 10, style: 'bold', color: todayCol, align: 'right' })
   y += 13
 
-    // ── 5. STATUT + BALANCE ──────────────────────────────────────────────────
-  const statusBg   = status === 'paid' ? GBG : (status === 'partial' ? ABGC : [254, 226, 226])
-  const statusCol  = status === 'paid' ? GREEN : (status === 'partial' ? AMBER : [153, 27, 27])
-  const statusText = status === 'paid' ? 'FULLY PAID' : status === 'partial' ? 'PARTIAL PAYMENT' : 'PENDING'
+  // ════════════════════════════════════════════════════════════════════════
+  // 5. RÉCAPITULATIF DU COMPTE PAR PRESTATION (taille réduite)
+  // ════════════════════════════════════════════════════════════════════════
+  if (feeTypes.length > 0) {
+    hline(doc, y, BLUE_L, 0.5)
+    y += 3
 
-  fillRect(doc, M, y, CW, 10, statusBg)
-  doc.setDrawColor(...statusCol)
-  doc.rect(M, y, CW, 10, 'S')
+    text(doc, 'ACCOUNT SUMMARY', M, y + 3.5, { size: 6, style: 'bold', color: DGRAY })
+    y += 6
 
-  text(doc, statusText, M + 2, y + 7, { size: 9, style: 'bold', color: statusCol })
-  const balanceDue = totalExpected - totalPaid
-  if (balanceDue > 0) {
-    text(doc, 'Balance due: ' + fmtGHS(balanceDue), A5_W - M - 2, y + 7, { size: 8, style: 'bold', color: AMBER, align: 'right' })
-  } else {
-    text(doc, 'Balance due: GHS 0.00', A5_W - M - 2, y + 7, { size: 8, color: GREEN, align: 'right' })
+    // Largeurs colonnes
+    const labelW = 24
+    const nFees  = feeTypes.length
+    const feeW   = Math.floor((CW - labelW) / (nFees + 1)) // +1 pour colonne TOTAL
+    const totalW = CW - labelW - feeW * nFees
+
+    // En-tête colonnes (size 5.5 — réduit)
+    fillRect(doc, M, y, CW, 5, [50, 80, 130])
+    feeTypes.forEach((ft, i) => {
+      const cx = M + labelW + i * feeW + feeW - 1
+      const lbl = ft.label.length > 9 ? ft.label.slice(0, 8) + '.' : ft.label
+      text(doc, lbl, cx, y + 3.5, { size: 5.5, style: 'bold', color: WHITE, align: 'right' })
+    })
+    text(doc, 'TOTAL', M + labelW + feeW * nFees + totalW - 1, y + 3.5,
+      { size: 5.5, style: 'bold', color: WHITE, align: 'right' })
+    y += 5
+
+    // 3 lignes : Annual Due / Total Paid / Balance
+    // Utilisation de la clé insensible à la casse pour les paiements
+    const summaryRows = [
+      {
+        label: 'Annual Due',
+        bg: LGRAY,
+        color: BLACK,
+        vals: feeTypes.map(ft => ft.annual),
+        total: totalAnnualDue,
+      },
+      {
+        label: 'Total Paid',
+        bg: [235, 252, 240],
+        color: GREEN,
+        vals: feeTypes.map(ft => paidByType[(ft.type || '').toLowerCase()] || 0),
+        total: totalPaidAll,
+      },
+      {
+        label: 'Balance',
+        bg: totalBalance > 0 ? ABGC : GBG,
+        color: totalBalance > 0 ? AMBER : GREEN,
+        vals: feeTypes.map(ft => Math.max(0, ft.annual - (paidByType[(ft.type || '').toLowerCase()] || 0))),
+        total: totalBalance,
+      },
+    ]
+
+    summaryRows.forEach((row, ri) => {
+      fillRect(doc, M, y, CW, 5, row.bg)
+      strokeRect(doc, M, y, CW, 5, MGRAY, 0.1)
+      text(doc, row.label, M + 2, y + 3.5, { size: 5.5, style: 'bold', color: DGRAY })
+      row.vals.forEach((val, i) => {
+        const cx = M + labelW + i * feeW + feeW - 1
+        text(doc, fmtGHS(val), cx, y + 3.5, { size: 5.5, color: row.color, align: 'right' })
+      })
+      text(doc, fmtGHS(row.total),
+        M + labelW + feeW * nFees + totalW - 1, y + 3.5,
+        { size: 5.5, style: 'bold', color: row.color, align: 'right' })
+      y += 5
+    })
+    y += 4
   }
-  y += 14
 
-  // ── 6. NOTES ─────────────────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════
+  // 6. NOTES
+  // ════════════════════════════════════════════════════════════════════════
   if (notes) {
-    text(doc, 'Note: ' + notes, M, y, { size: 7.5, color: DGRAY, maxWidth: CW })
-    y += 7
+    text(doc, 'Note: ' + notes, M, y + 3, { size: 7, color: DGRAY, maxWidth: CW })
+    y += 8
   }
 
-  // ── 7. SIGNATURE ─────────────────────────────────────────────────────────
-  y = Math.max(y, A5_H - 38)
-  line(doc, y, [200, 210, 230])
-  y += 5
-
-  // Collecté par
-  text(doc, 'Received by:', M, y, { size: 7.5, style: 'bold', color: DGRAY })
-  text(doc, payment.collected_by_name || '________________', M, y + 7, { size: 8, color: BLACK })
-
-  // Signature
-  const sigX = A5_W - M - 50
-  text(doc, 'Signature / Stamp:', sigX, y, { size: 7.5, style: 'bold', color: DGRAY })
+  // ════════════════════════════════════════════════════════════════════════
+  // 7. SIGNATURE
+  // ════════════════════════════════════════════════════════════════════════
+  y = Math.max(y, A5_H - 32)
+  hline(doc, y, [200, 210, 230], 0.3)
+  y += 4
+  text(doc, 'Received by:', M, y, { size: 7, style: 'bold', color: DGRAY })
+  text(doc, payment.collected_by_name || '________________', M, y + 6, { size: 7.5, color: BLACK })
+  const sigX = A5_W - M - 45
+  text(doc, 'Signature / Stamp:', sigX, y, { size: 7, style: 'bold', color: DGRAY })
   doc.setDrawColor(160, 160, 160)
   doc.setLineWidth(0.3)
-  doc.line(sigX, y + 10, A5_W - M, y + 10)
-  y += 16
+  doc.line(sigX, y + 9, A5_W - M, y + 9)
 
-  // ── 8. PIED DE PAGE ──────────────────────────────────────────────────────
-  fillRect(doc, 0, A5_H - 10, A5_W, 10, BLUE)
+  // ════════════════════════════════════════════════════════════════════════
+  // 8. PIED DE PAGE
+  // ════════════════════════════════════════════════════════════════════════
+  fillRect(doc, 0, A5_H - 9, A5_W, 9, BLUE)
   text(doc, 'Computer-generated receipt — valid without stamp.  SMS confirmation sent to parent.',
-    A5_W / 2, A5_H - 4, { size: 6.5, color: [180, 210, 245], align: 'center' })
+    A5_W / 2, A5_H - 3.5, { size: 6, color: [180, 210, 245], align: 'center' })
 
-  // ── IMPRESSION DIRECTE (ouverture dans nouvel onglet) ─────────────────────
+  // ── Ouverture dans nouvel onglet (sans téléchargement) ────────────────────
   const blob = doc.output('blob')
-const url = URL.createObjectURL(blob)
-window.open(url, '_blank')
+  const url  = URL.createObjectURL(blob)
+  window.open(url, '_blank')
 }
