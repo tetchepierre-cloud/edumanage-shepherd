@@ -255,14 +255,6 @@ export async function printReceipt(payment, schoolConfig = {}) {
 
   // ── IMPRESSION DIRECTE (ouverture dans nouvel onglet) ─────────────────────
   const blob = doc.output('blob')
-  const url = URL.createObjectURL(blob)
-  const printWindow = window.open(url, '_blank')
-  if (printWindow) {
-    printWindow.onload = () => {
-      printWindow.print()
-    }
-  } else {
-    // Fallback : téléchargement forcé
-    doc.save(`Receipt-${receiptNo}.pdf`)
-  }
+const url = URL.createObjectURL(blob)
+window.open(url, '_blank')
 }

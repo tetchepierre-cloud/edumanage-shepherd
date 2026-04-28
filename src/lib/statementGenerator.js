@@ -371,9 +371,6 @@ export async function generateStudentStatement({
 
   // ── SORTIE ────────────────────────────────────────────────────────────
   const blob = doc.output('blob')
-  const url  = URL.createObjectURL(blob)
-  const win = window.open(url, '_blank')
-  if (!win) {
-    doc.save(`Statement-${student.last_name || 'Student'}-${periodLabel.replace(/\//g,'-')}.pdf`)
-  }
+const url  = URL.createObjectURL(blob)
+window.open(url, '_blank')
 }
