@@ -25,6 +25,7 @@ export default function FeesPage() {
   const [filterTerm,   setFilterTerm]   = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterYear,   setFilterYear]   = useState('')
+  const [studentSearch, setStudentSearch] = useState('')
 
   const [form, setForm] = useState({
     student_id:     '',
@@ -180,6 +181,7 @@ export default function FeesPage() {
     term:           'Term 1',
     notes:          '',
   })
+  setStudentSearch('')  // ← ajouter cette ligne
   setMessage('')
   setShowForm(true)
 }
@@ -565,13 +567,39 @@ const payload = {
               {message && (
                 <div className={`px-4 py-3 rounded-lg text-sm font-medium ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>
               )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Student <span className="text-red-500">*</span></label>
-                <select required value={form.student_id} onChange={e => setForm(f => ({ ...f, student_id: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  <option value="">Select a student...</option>
-                  {students.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} — {s.classes?.name || 'No class'}</option>)}
-                </select>
-              </div>
+<div className="relative">
+  <label className="block text-sm font-medium text-gray-700 mb-1">Student <span className="text-red-500">*</span></label>
+  <input
+    type="text"
+    placeholder="Type name to search..."
+    value={studentSearch}
+    onChange={e => { setStudentSearch(e.target.value); setForm(f => ({ ...f, student_id: '' })) }}
+    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+    autoComplete="off"
+  />
+  {studentSearch.length > 0 && form.student_id === '' && (
+    <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto mt-1">
+      {students
+        .filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase()))
+        .slice(0, 10)
+        .map(s => (
+          <div key={s.id}
+            onClick={() => { setForm(f => ({ ...f, student_id: s.id })); setStudentSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`) }}
+            className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0">
+            <span className="font-medium">{s.first_name} {s.last_name}</span>
+            <span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span>
+          </div>
+        ))
+      }
+      {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).length === 0 && (
+        <div className="px-3 py-2 text-sm text-gray-400">No student found</div>
+      )}
+    </div>
+  )}
+  {form.student_id && (
+    <div className="mt-1 text-xs text-green-600 font-medium">✓ Student selected</div>
+  )}
+</div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Amount (GHS) <span className="text-red-500">*</span></label>
                 <input type="number" required min="0" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="0.00" />
