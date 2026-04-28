@@ -167,6 +167,7 @@ export default function FeesPage() {
   }
 
   const openAddForm = async () => {
+  await fetchStudents()
   setEditPayment(null)
   setForm({
     student_id:     '',
