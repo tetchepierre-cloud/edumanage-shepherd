@@ -68,11 +68,42 @@ export async function generateReceiptNumber() {
   return data
 }
 
-// ── Historique paiements élève pour l'année ───────────────────────────────────
+// ── Récupération de la structure annuelle des frais pour le niveau d’un élève ─
+async function getAnnualFeeStructure(student, academicYear) {
+  const className = (student.classes?.name || '').trim()
+  if (!className) return []
+
+  const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
+
+  const { data: level } = await supabase
+    .from('levels')
+    .select('id')
+    .ilike('name', levelName)
+    .maybeSingle()
+
+  if (!level) return []
+
+  const { data: fees } = await supabase
+    .from('fee_structure')
+    .select('fee_name, fee_type, amount')
+    .eq('level_id', level.id)
+    .eq('academic_year', academicYear)
+    .eq('is_active', true)
+
+  if (!fees?.length) return []
+
+  return fees.map(f => ({
+    label: f.fee_name,
+    type: f.fee_type,
+    annual: parseFloat(f.amount),
+  }))
+}
+
+// ── Historique paiements élève (inclut les lignes détaillées) ────────────────
 async function getStudentPaymentHistory(studentId, academicYear) {
   const { data } = await supabase
     .from('fee_payments')
-    .select('amount, payment_type, status')
+    .select('amount, payment_type, status, fee_items')
     .eq('student_id', studentId)
     .eq('academic_year', academicYear)
     .in('status', ['paid', 'partial'])
@@ -105,29 +136,47 @@ export async function printReceipt(payment, schoolConfig = {}) {
   const amountPaidToday = parseFloat(payment.amount || 0)
   const paymentType     = payment.payment_type   || 'Tuition'
 
-  // ── Fee structure (prestations annuelles) ────────────────────────────────
-  const feeStructure = Array.isArray(payment.feeItems) && payment.feeItems.length > 0
-    ? payment.feeItems
-    : []
+  // ── Lignes de frais du jour (fournies par FeesPage) ──────────────────────
+  const feeItems = Array.isArray(payment.feeItems) && payment.feeItems.length > 0
+    ? payment.feeItems.map(item => ({
+        description: item.description || item.type || 'Tuition',
+        expected:    parseFloat(item.expected || item.amount || 0),
+        paid:        parseFloat(item.paid || item.amount || 0),
+      }))
+    : [{
+        description: paymentType + ' — ' + term + ' (' + year + ')',
+        expected:    amountPaidToday,
+        paid:        amountPaidToday,
+      }]
 
-  // Prestations avec montant annuel
-  const feeTypes = feeStructure.map(f => ({
-    label:  f.description.split(' (')[0],
-    type:   f.description.match(/\(([^)]+)\)/)?.[1] || f.description.split(' (')[0],
-    annual: parseFloat(f.expected || 0),
-  }))
+  // ═══════════════ RÉCUPÉRATION DE LA STRUCTURE ANNUELLE ═════════════════
+  const annualStructure = await getAnnualFeeStructure(student, year)
+
+  // À partir de la structure annuelle, on construit feeTypes pour le tableau du bas
+  const feeTypes = annualStructure.length > 0 ? annualStructure : [
+    { label: 'Tuition', type: 'tuition', annual: 0 } // fallback
+  ]
 
   // ── Historique complet des paiements de l'élève ──────────────────────────
   const history = await getStudentPaymentHistory(payment.student_id, year)
 
-  // Total payé par type (insensible à la casse)
+  // Calcul des totaux payés par type en tenant compte des paiements multiples
   const paidByType = {}
   history.forEach(p => {
-    const key = (p.payment_type || '').toLowerCase()
-    paidByType[key] = (paidByType[key] || 0) + parseFloat(p.amount || 0)
+    // Si fee_items existe et est non vide, on ventile chaque ligne
+    if (p.fee_items && Array.isArray(p.fee_items) && p.fee_items.length > 0) {
+      p.fee_items.forEach(fi => {
+        const key = (fi.type || '').toLowerCase()
+        paidByType[key] = (paidByType[key] || 0) + parseFloat(fi.amount || 0)
+      })
+    } else {
+      // Paiement simple (ancien format)
+      const key = (p.payment_type || '').toLowerCase()
+      paidByType[key] = (paidByType[key] || 0) + parseFloat(p.amount || 0)
+    }
   })
 
-  const totalAnnualDue = feeTypes.reduce((s, ft) => s + ft.annual, 0)
+  const totalAnnualDue = annualStructure.reduce((s, ft) => s + ft.annual, 0)
   const totalPaidAll   = history.reduce((s, p) => s + parseFloat(p.amount || 0), 0)
   const totalBalance   = Math.max(0, totalAnnualDue - totalPaidAll)
 
@@ -177,34 +226,32 @@ export async function printReceipt(payment, schoolConfig = {}) {
   y += 27
 
   // ════════════════════════════════════════════════════════════════════════
-  // 4. CE PAIEMENT AUJOURD'HUI (taille normale)
+  // 4. CE PAIEMENT AUJOURD'HUI
   // ════════════════════════════════════════════════════════════════════════
   text(doc, 'THIS PAYMENT', M, y + 4, { size: 7.5, style: 'bold', color: BLUE })
   y += 6
 
-  // En-tête
   fillRect(doc, M, y, CW, 6.5, BLUE)
   text(doc, 'Description', M + 2, y + 4.5, { size: 8, style: 'bold', color: WHITE })
   text(doc, 'Amount Paid', A5_W - M - 2, y + 4.5, { size: 8, style: 'bold', color: WHITE, align: 'right' })
   y += 6.5
 
-  // Ligne paiement
-  fillRect(doc, M, y, CW, 8, WHITE)
-  strokeRect(doc, M, y, CW, 8, MGRAY)
-  text(doc, paymentType + ' — ' + term + ' (' + year + ')', M + 2, y + 5.5, { size: 9, color: BLACK })
-  text(doc, fmtGHS(amountPaidToday), A5_W - M - 2, y + 5.5, { size: 9, style: 'bold', color: BLACK, align: 'right' })
-  y += 8
+  let paidY = y
+  feeItems.forEach((item, idx) => {
+    const bgColor = idx % 2 === 0 ? WHITE : [250, 250, 252]
+    fillRect(doc, M, paidY, CW, 7, bgColor)
+    strokeRect(doc, M, paidY, CW, 7, MGRAY)
+    text(doc, item.description, M + 2, paidY + 5, { size: 8, color: BLACK })
+    text(doc, fmtGHS(item.paid), A5_W - M - 2, paidY + 5, { size: 8, style: 'bold', color: BLACK, align: 'right' })
+    paidY += 7
+  })
 
-  // Total today
-  const todayBg  = status === 'paid' ? GBG : ABGC
-  const todayCol = status === 'paid' ? GREEN : AMBER
-  fillRect(doc, M, y, CW, 9, todayBg)
-  strokeRect(doc, M, y, CW, 9, todayCol, 0.4)
-  text(doc, status === 'paid' ? '✓  FULLY PAID' : '⚠  PARTIAL PAYMENT',
-    M + 2, y + 6, { size: 9, style: 'bold', color: todayCol })
-  text(doc, fmtGHS(amountPaidToday), A5_W - M - 2, y + 6,
-    { size: 10, style: 'bold', color: todayCol, align: 'right' })
-  y += 13
+  fillRect(doc, M, paidY, CW, 9, GBG)
+  strokeRect(doc, M, paidY, CW, 9, GREEN, 0.4)
+  text(doc, 'TOTAL', M + 2, paidY + 6, { size: 9, style: 'bold', color: GREEN })
+  text(doc, fmtGHS(amountPaidToday), A5_W - M - 2, paidY + 6, { size: 10, style: 'bold', color: GREEN, align: 'right' })
+  paidY += 14
+  y = paidY
 
   // ════════════════════════════════════════════════════════════════════════
   // 5. RÉCAPITULATIF DU COMPTE PAR PRESTATION (taille réduite)
@@ -216,13 +263,11 @@ export async function printReceipt(payment, schoolConfig = {}) {
     text(doc, 'ACCOUNT SUMMARY', M, y + 3.5, { size: 6, style: 'bold', color: DGRAY })
     y += 6
 
-    // Largeurs colonnes
     const labelW = 24
     const nFees  = feeTypes.length
-    const feeW   = Math.floor((CW - labelW) / (nFees + 1)) // +1 pour colonne TOTAL
+    const feeW   = Math.floor((CW - labelW) / (nFees + 1))
     const totalW = CW - labelW - feeW * nFees
 
-    // En-tête colonnes (size 5.5 — réduit)
     fillRect(doc, M, y, CW, 5, [50, 80, 130])
     feeTypes.forEach((ft, i) => {
       const cx = M + labelW + i * feeW + feeW - 1
@@ -233,29 +278,32 @@ export async function printReceipt(payment, schoolConfig = {}) {
       { size: 5.5, style: 'bold', color: WHITE, align: 'right' })
     y += 5
 
-    // 3 lignes : Annual Due / Total Paid / Balance
-    // Utilisation de la clé insensible à la casse pour les paiements
+    // Calcul correct des valeurs par type
+    const valsAnnual = feeTypes.map(ft => ft.annual)
+    const valsPaid   = feeTypes.map(ft => paidByType[(ft.type || '').toLowerCase()] || 0)
+    const valsBalance = feeTypes.map(ft => Math.max(0, ft.annual - (paidByType[(ft.type || '').toLowerCase()] || 0)))
+
     const summaryRows = [
       {
         label: 'Annual Due',
         bg: LGRAY,
         color: BLACK,
-        vals: feeTypes.map(ft => ft.annual),
+        vals: valsAnnual,
         total: totalAnnualDue,
       },
       {
         label: 'Total Paid',
         bg: [235, 252, 240],
         color: GREEN,
-        vals: feeTypes.map(ft => paidByType[(ft.type || '').toLowerCase()] || 0),
-        total: totalPaidAll,
+        vals: valsPaid,
+        total: valsPaid.reduce((s, v) => s + v, 0),
       },
       {
         label: 'Balance',
         bg: totalBalance > 0 ? ABGC : GBG,
         color: totalBalance > 0 ? AMBER : GREEN,
-        vals: feeTypes.map(ft => Math.max(0, ft.annual - (paidByType[(ft.type || '').toLowerCase()] || 0))),
-        total: totalBalance,
+        vals: valsBalance,
+        total: valsBalance.reduce((s, v) => s + v, 0),
       },
     ]
 

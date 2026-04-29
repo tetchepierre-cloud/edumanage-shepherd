@@ -33,7 +33,7 @@ const EMPTY_FEE_FORM = { fee_name: '', fee_type: 'tuition', amount: '', is_manda
 export default function FeeManagementPage() {
   const [activeTab, setActiveTab] = useState('structure');
   return (
-    <div className="space-y-6">
+    <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Fee Management</h1>
         <p className="text-sm text-gray-500 mt-1">Manage fee structures, payment schedules, and collect payments</p>

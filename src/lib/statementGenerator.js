@@ -169,15 +169,29 @@ export async function generateStudentStatement({
     }
   }
 
-  // Seules les lignes de paiement sont ajoutées
+  // Paiements réels — ventilation des paiements multiples
   ;(payments || []).forEach(p => {
-    addRow({
-      date:        new Date(p.created_at),
-      description: `Payment received — ${p.payment_type} · ${p.payment_method} · ${p.receipt_number || ''}`,
-      expected:    0,
-      paid:        parseFloat(p.amount),
-      type:        'payment',
-    })
+    if (p.payment_type === 'Multiple' && p.fee_items && Array.isArray(p.fee_items) && p.fee_items.length > 0) {
+      // Ventiler chaque ligne de frais comme un paiement distinct
+      p.fee_items.forEach(fi => {
+        addRow({
+          date:        new Date(p.created_at),
+          description: `Payment received — ${fi.type} · ${p.payment_method} · ${p.receipt_number || ''}`,
+          expected:    0,
+          paid:        parseFloat(fi.amount || 0),
+          type:        'payment',
+        })
+      })
+    } else {
+      // Paiement simple (ou ancien format)
+      addRow({
+        date:        new Date(p.created_at),
+        description: `Payment received — ${p.payment_type} · ${p.payment_method} · ${p.receipt_number || ''}`,
+        expected:    0,
+        paid:        parseFloat(p.amount || 0),
+        type:        'payment',
+      })
+    }
   })
 
   // Tri chronologique
@@ -319,7 +333,7 @@ export async function generateStudentStatement({
       pageRemaining = A4_H - y - 20
     }
 
-    const bg = idx % 2 === 0 ? WHITE : [250, 250, 252]   // fond neutre pour toutes les lignes
+    const bg = idx % 2 === 0 ? WHITE : [250, 250, 252]
 
     fillRect(doc, M, y, CW, 6.5, bg)
     strokeRect(doc, M, y, CW, 6.5, MGRAY)
@@ -330,7 +344,6 @@ export async function generateStudentStatement({
       doc.line(cx, y, cx, y + 6.5)
     })
 
-    // Tous les textes en noir standard (plus de vert ni de gras)
     txt(doc, fmtD(r.date), colX[0] + 2, y + 4.5, { size: 7, color: BLACK })
     txt(doc, r.description, colX[1] + 2, y + 4.5, {
       size: 7, color: BLACK,
@@ -343,7 +356,6 @@ export async function generateStudentStatement({
       size: 7, color: r.paid > 0 ? BLACK : [180, 180, 180], align: 'right'
     })
 
-    // Balance conserve ses couleurs distinctives
     const balColor = r.balance > 0 ? RED : (r.balance < 0 ? BLUE : GREEN)
     txt(doc, ghs(r.balance), colX[4] + cols[4] - 1, y + 4.5, {
       size: 7, style: 'bold', color: balColor, align: 'right'
@@ -371,6 +383,9 @@ export async function generateStudentStatement({
 
   // ── SORTIE ────────────────────────────────────────────────────────────
   const blob = doc.output('blob')
-const url  = URL.createObjectURL(blob)
-window.open(url, '_blank')
+  const url  = URL.createObjectURL(blob)
+  const win = window.open(url, '_blank')
+  if (!win) {
+    doc.save(`Statement-${student.last_name || 'Student'}-${periodLabel.replace(/\//g,'-')}.pdf`)
+  }
 }
