@@ -20,6 +20,17 @@ export default function StudentsPage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
+  // ── États pour le modal du relevé ────────────────────────────────────────
+  const [showStatementModal, setShowStatementModal] = useState(false)
+  const [statementStudent, setStatementStudent] = useState(null)
+  const [statementParams, setStatementParams] = useState({
+    academicYear: '2025/2026',
+    periodType: '1',   // 1=Année académique, 2=Terme, 3=Personnalisé
+    term: 'T1',
+    customFrom: '',
+    customTo: '',
+  })
+
   useEffect(() => {
     fetchClasses()
     fetchStudents()
@@ -92,7 +103,6 @@ export default function StudentsPage() {
     try {
       if (editStudent) {
         const oldStudent = students.find(s => s.id === editStudent.id)
-
         const { data, error } = await supabase
           .from('students')
           .update(payload)
@@ -171,29 +181,26 @@ export default function StudentsPage() {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // NOUVEAU : Relevé de compte
-  // ─────────────────────────────────────────────────────────────
-  const handleStatement = async (student) => {
-    const academicYear = prompt('Academic year?', '2025/2026') || '2025/2026'
-    const { data: settings } = await supabase.from('app_settings').select('*')
-    const config = {}
-    settings?.forEach(d => { config[d.key] = d.value })
-
-    await generateStudentStatement({
-      student,
-      academicYear,
-      schoolConfig: {
-        school_name: config.school_name || 'BRIGHT FUTURE SCHOOL',
-        address:     config.address     || 'Tamale, Northern Region',
-        phone:       config.phone       || '+233 20 000 0000',
-        email:       config.email       || '',
-        logo:        config.logo        || null,
-      },
+  // ═══════════════════════════════════════════════════════════════════════
+  // Ouvre le modal du relevé de compte (plus de prompts)
+  // ═══════════════════════════════════════════════════════════════════════
+  const handleStatement = (student) => {
+    setStatementStudent({
+      id: student.id,
+      first_name: student.first_name,
+      last_name: student.last_name,
+      class_id: student.class_id,
+      classes: student.classes
     })
+    setStatementParams({
+      academicYear: '2025/2026',
+      periodType: '1',
+      term: 'T1',
+      customFrom: '',
+      customTo: '',
+    })
+    setShowStatementModal(true)
   }
-
-  // ─────────────────────────────────────────────────────────────
 
   const filtered = students.filter(s => {
     const fullName = `${s.first_name} ${s.last_name}`.toLowerCase()
@@ -337,15 +344,8 @@ export default function StudentsPage() {
                         >
                           ✏️ Edit
                         </button>
-                        {/* ── Bouton Relevé de compte ── */}
                         <button
-                          onClick={() => handleStatement({
-                            id: student.id,
-                            first_name: student.first_name,
-                            last_name: student.last_name,
-                            class_id: student.class_id,
-                            classes: student.classes
-                          })}
+                          onClick={() => handleStatement(student)}
                           className="text-purple-600 hover:text-purple-800 text-sm
                                      font-medium px-2 py-1 rounded hover:bg-purple-50"
                         >
@@ -375,7 +375,6 @@ export default function StudentsPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full
                           max-w-2xl max-h-[90vh] overflow-y-auto">
 
-            {/* Header modal */}
             <div className="p-6 border-b flex items-center justify-between
                             sticky top-0 bg-white z-10">
               <h3 className="text-lg font-semibold text-gray-900">
@@ -389,60 +388,30 @@ export default function StudentsPage() {
               </button>
             </div>
 
-            {/* Formulaire */}
             <form onSubmit={handleSave} className="p-6 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-                {/* First Name */}
                 <div>
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    First Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={form.first_name}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                  <input type="text" required value={form.first_name}
                     onChange={e => setForm({ ...form, first_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                    placeholder="e.g. Kofi"
-                  />
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    placeholder="e.g. Kofi" />
                 </div>
 
-                {/* Last Name */}
                 <div>
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    Last Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={form.last_name}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
+                  <input type="text" required value={form.last_name}
                     onChange={e => setForm({ ...form, last_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                    placeholder="e.g. Mensah"
-                  />
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    placeholder="e.g. Mensah" />
                 </div>
 
-                {/* Class */}
                 <div>
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    Class *
-                  </label>
-                  <select
-                    required
-                    value={form.class_id}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Class *</label>
+                  <select required value={form.class_id}
                     onChange={e => setForm({ ...form, class_id: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                  >
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
                     <option value="">Select class</option>
                     {classes.map(c => (
                       <option key={c.id} value={c.id}>{c.name}</option>
@@ -450,35 +419,18 @@ export default function StudentsPage() {
                   </select>
                 </div>
 
-                {/* Date of Birth */}
                 <div>
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    Date of Birth
-                  </label>
-                  <input
-                    type="date"
-                    value={form.date_of_birth}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
+                  <input type="date" value={form.date_of_birth}
                     onChange={e => setForm({ ...form, date_of_birth: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                  />
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
                 </div>
 
-                {/* Gender */}
                 <div>
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    Gender
-                  </label>
-                  <select
-                    value={form.gender}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+                  <select value={form.gender}
                     onChange={e => setForm({ ...form, gender: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                  >
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
                     <option value="">Select gender</option>
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
@@ -486,110 +438,56 @@ export default function StudentsPage() {
                   </select>
                 </div>
 
-                {/* Status */}
                 <div>
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    Status
-                  </label>
-                  <select
-                    value={form.active}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                  <select value={form.active}
                     onChange={e => setForm({ ...form, active: e.target.value === 'true' })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                  >
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
                     <option value="true">Active</option>
                     <option value="false">Inactive</option>
                   </select>
                 </div>
 
-                {/* Parent Name */}
                 <div>
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    Parent / Guardian Name
-                  </label>
-                  <input
-                    type="text"
-                    value={form.parent_name}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Parent / Guardian Name</label>
+                  <input type="text" value={form.parent_name}
                     onChange={e => setForm({ ...form, parent_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                    placeholder="e.g. Ama Mensah"
-                  />
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    placeholder="e.g. Ama Mensah" />
                 </div>
 
-                {/* Parent Phone */}
                 <div>
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    Parent Phone
-                  </label>
-                  <input
-                    type="tel"
-                    value={form.parent_phone}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Parent Phone</label>
+                  <input type="tel" value={form.parent_phone}
                     onChange={e => setForm({ ...form, parent_phone: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                    placeholder="e.g. 0244000000"
-                  />
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    placeholder="e.g. 0244000000" />
                 </div>
 
-                {/* Address */}
                 <div className="md:col-span-2">
-                  <label className="block text-sm font-medium
-                                    text-gray-700 mb-1">
-                    Address
-                  </label>
-                  <input
-                    type="text"
-                    value={form.address}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
+                  <input type="text" value={form.address}
                     onChange={e => setForm({ ...form, address: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300
-                               rounded-lg focus:ring-2 focus:ring-blue-500
-                               outline-none text-sm"
-                    placeholder="e.g. Tamale, Northern Region"
-                  />
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    placeholder="e.g. Tamale, Northern Region" />
                 </div>
 
               </div>
 
-              {/* Message dans modal */}
               {message && (
                 <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
-                  message.includes('❌')
-                    ? 'bg-red-50 text-red-600'
-                    : 'bg-green-50 text-green-600'
-                }`}>
+                  message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
                   {message}
                 </div>
               )}
 
-              {/* Boutons */}
               <div className="flex gap-3 pt-2">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white
-                             font-medium py-2 rounded-lg transition-colors
-                             disabled:opacity-50"
-                >
-                  {saving
-                    ? '⏳ Saving...'
-                    : editStudent
-                      ? '✅ Update Student'
-                      : '✅ Add Student'
-                  }
+                <button type="submit" disabled={saving}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50">
+                  {saving ? '⏳ Saving...' : editStudent ? '✅ Update Student' : '✅ Add Student'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                  className="px-6 py-2 border border-gray-300 text-gray-700
-                             rounded-lg hover:bg-gray-50 transition-colors"
-                >
+                <button type="button" onClick={() => setShowForm(false)}
+                  className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
                   Cancel
                 </button>
               </div>
@@ -598,6 +496,145 @@ export default function StudentsPage() {
           </div>
         </div>
       )}
+
+      {/* ── Modal du relevé de compte ── */}
+      {showStatementModal && statementStudent && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10">
+              <h3 className="text-lg font-bold text-gray-900">📄 Student Statement</h3>
+              <button onClick={() => setShowStatementModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Student info (read-only) */}
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-sm font-medium text-gray-900">
+                  {statementStudent.first_name} {statementStudent.last_name}
+                </p>
+                <p className="text-xs text-gray-500">{statementStudent.classes?.name || 'No class'}</p>
+              </div>
+
+              {/* Academic Year */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+                <select
+                  value={statementParams.academicYear}
+                  onChange={e => setStatementParams({ ...statementParams, academicYear: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="2024/2025">2024/2025</option>
+                  <option value="2025/2026">2025/2026</option>
+                  <option value="2026/2027">2026/2027</option>
+                </select>
+              </div>
+
+              {/* Period Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label>
+                <select
+                  value={statementParams.periodType}
+                  onChange={e => setStatementParams({ ...statementParams, periodType: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="1">Full Academic Year</option>
+                  <option value="2">Term</option>
+                  <option value="3">Custom</option>
+                </select>
+              </div>
+
+              {/* Term selector (si type 2) */}
+              {statementParams.periodType === '2' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Term</label>
+                  <select
+                    value={statementParams.term}
+                    onChange={e => setStatementParams({ ...statementParams, term: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  >
+                    <option value="T1">Term 1</option>
+                    <option value="T2">Term 2</option>
+                    <option value="T3">Term 3</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Dates personnalisées (si type 3) */}
+              {statementParams.periodType === '3' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Date from</label>
+                    <input
+                      type="date"
+                      value={statementParams.customFrom}
+                      onChange={e => setStatementParams({ ...statementParams, customFrom: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Date to</label>
+                    <input
+                      type="date"
+                      value={statementParams.customTo}
+                      onChange={e => setStatementParams({ ...statementParams, customTo: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Bouton Generate */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowStatementModal(false)}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const { data: settings } = await supabase.from('app_settings').select('*')
+                    const config = {}
+                    settings?.forEach(d => { config[d.key] = d.value })
+
+                    // Déterminer les dates
+                    let period = 'full', customFrom = null, customTo = null
+                    if (statementParams.periodType === '2') {
+                      period = statementParams.term
+                    } else if (statementParams.periodType === '3') {
+                      period = 'custom'
+                      customFrom = statementParams.customFrom
+                      customTo = statementParams.customTo
+                    }
+
+                    setShowStatementModal(false)
+                    await generateStudentStatement({
+                      student: statementStudent,
+                      academicYear: statementParams.academicYear,
+                      period,
+                      customFrom,
+                      customTo,
+                      schoolConfig: {
+                        school_name: config.school_name || 'BRIGHT FUTURE SCHOOL',
+                        address:     config.address     || 'Tamale, Northern Region',
+                        phone:       config.phone       || '+233 20 000 0000',
+                        email:       config.email       || '',
+                        logo:        config.logo        || null,
+                      },
+                    })
+                  }}
+                  className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium text-sm disabled:opacity-50"
+                >
+                  Generate Statement
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

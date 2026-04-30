@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { logAction } from '../lib/audit'
 import { printReceipt, generateReceiptNumber } from '../lib/receiptGenerator'
+import { generateFeesReport } from '../lib/feesReportGenerator'
 
 const PAYMENT_TYPES  = ['Tuition', 'Uniform', 'Books', 'Exam', 'Other']
 const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Bank Transfer', 'Cheque']
@@ -54,6 +55,17 @@ export default function FeesPage() {
     phone:       '+233 20 000 0000',
     email:       '',
     logo:        null,
+  })
+
+  // ── États pour le modal du rapport ──────────────────────────────────────
+  const [showReportModal, setShowReportModal] = useState(false)
+  const [reportParams, setReportParams] = useState({
+    academicYear: '2025/2026',
+    periodType: '1',   // 1=Année académique, 2=Mois, 3=Personnalisé
+    monthInput: '04/2026',
+    customFrom: '',
+    customTo: '',
+    tableType: '1',    // 1=Par classe, 2=Par élève
   })
 
   useEffect(() => { fetchAll(); loadSchoolConfig() }, [])
@@ -311,6 +323,13 @@ export default function FeesPage() {
     )
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // Ouvre le modal du rapport (plus de prompts)
+  // ═══════════════════════════════════════════════════════════════════════
+  const handleGenerateReport = () => {
+    setShowReportModal(true)
+  }
+
   const handleSave = async (e) => {
     e.preventDefault()
     setSaving(true)
@@ -563,13 +582,23 @@ export default function FeesPage() {
           <h2 className="text-2xl font-bold text-gray-900">Fee Payments</h2>
           <p className="text-gray-500 text-sm">{payments.length} payment records</p>
         </div>
-        <button
-          onClick={openAddForm}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
-                     rounded-lg font-medium transition-colors flex items-center gap-2"
-        >
-          ➕ Record Payment
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={openAddForm}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
+                       rounded-lg font-medium transition-colors flex items-center gap-2"
+          >
+            ➕ Record Payment
+          </button>
+          <button
+            onClick={handleGenerateReport}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2
+                       rounded-lg font-medium transition-colors flex items-center gap-2"
+            title="Fees Collection Report"
+          >
+            📊 Fees Report
+          </button>
+        </div>
       </div>
 
       {message && !showForm && (
@@ -669,7 +698,7 @@ export default function FeesPage() {
         )}
       </div>
 
-      {/* ── Modal avec lignes de frais dynamiques ── */}
+      {/* ── Modal du formulaire de paiement ── */}
       {showForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -832,6 +861,142 @@ export default function FeesPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal du rapport des frais ── */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10">
+              <h3 className="text-lg font-bold text-gray-900">📊 Generate Fees Report</h3>
+              <button onClick={() => setShowReportModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Academic Year */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+                <select
+                  value={reportParams.academicYear}
+                  onChange={e => setReportParams({ ...reportParams, academicYear: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+
+              {/* Period Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label>
+                <select
+                  value={reportParams.periodType}
+                  onChange={e => setReportParams({ ...reportParams, periodType: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="1">Academic Year (1 Sep – 30 Jun)</option>
+                  <option value="2">Month</option>
+                  <option value="3">Custom</option>
+                </select>
+              </div>
+
+              {/* Mois (si type 2) */}
+              {reportParams.periodType === '2' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Month (MM/YYYY)</label>
+                  <input
+                    type="text"
+                    placeholder="MM/YYYY"
+                    value={reportParams.monthInput}
+                    onChange={e => setReportParams({ ...reportParams, monthInput: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  />
+                </div>
+              )}
+
+              {/* Dates personnalisées (si type 3) */}
+              {reportParams.periodType === '3' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Date from</label>
+                    <input
+                      type="date"
+                      value={reportParams.customFrom}
+                      onChange={e => setReportParams({ ...reportParams, customFrom: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Date to</label>
+                    <input
+                      type="date"
+                      value={reportParams.customTo}
+                      onChange={e => setReportParams({ ...reportParams, customTo: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Table type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Table Type</label>
+                <select
+                  value={reportParams.tableType}
+                  onChange={e => setReportParams({ ...reportParams, tableType: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="1">By class</option>
+                  <option value="2">By student</option>
+                </select>
+              </div>
+
+              {/* Bouton Generate */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowReportModal(false)}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    // Déterminer les dates
+                    let dateFrom, dateTo
+                    const y = parseInt(reportParams.academicYear.split('/')[0])
+
+                    if (reportParams.periodType === '1') {
+                      dateFrom = new Date(y, 8, 1)          // 1er septembre
+                      dateTo   = new Date(y + 1, 5, 30)     // 30 juin
+                    } else if (reportParams.periodType === '2') {
+                      const [m, yyyy] = reportParams.monthInput.split('/').map(Number)
+                      dateFrom = new Date(yyyy, m - 1, 1)
+                      dateTo   = new Date(yyyy, m, 0, 23, 59, 59)
+                    } else {
+                      dateFrom = new Date(reportParams.customFrom)
+                      dateTo   = new Date(reportParams.customTo)
+                    }
+
+                    const tableType = reportParams.tableType === '2' ? 'student' : 'class'
+
+                    setShowReportModal(false)
+                    await generateFeesReport({
+                      academicYear: reportParams.academicYear,
+                      dateFrom,
+                      dateTo,
+                      tableType,
+                      schoolConfig,
+                    })
+                  }}
+                  className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium text-sm disabled:opacity-50"
+                >
+                  Generate Report
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
