@@ -3,12 +3,15 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { Settings, Plus, Loader2, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import toast from 'react-hot-toast'
+import FeeManagementPage from './FeeManagementPage'
+import AcademicSettingsTab from '../components/AcademicSettingsTab';
 
 export default function SettingsPage() {
   const [profile, setProfile]     = useState(null)
   const [classes, setClasses]     = useState([])
   const [staff, setStaff]         = useState([])
-  const [activeTab, setActiveTab] = useState('classes')
+  const [levels, setLevels]       = useState([])   // ← AJOUTÉ
+  const [activeTab, setActiveTab] = useState('school')
   const [loadingProfile, setLoadingProfile] = useState(true)
 
   const [newClass, setNewClass] = useState({ name: '', level: 'KG', capacity: 30 })
@@ -16,6 +19,17 @@ export default function SettingsPage() {
     first_name: '', last_name: '', position: 'Teacher',
     phone: '', email: '', base_salary: ''
   })
+
+  // ── État pour l'onglet École ──────────────────────────────────────────
+  const [schoolSettings, setSchoolSettings] = useState({
+    school_name: '',
+    address: '',
+    phone: '',
+    email: '',
+    logo: '',
+    academic_year: '2025/2026',
+  })
+  const [savingSchool, setSavingSchool] = useState(false)
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -28,15 +42,70 @@ export default function SettingsPage() {
     loadProfile()
   }, [])
 
-  useEffect(() => { fetchData() }, [])
+  useEffect(() => { fetchData(); loadSchoolSettings() }, [])
 
   const fetchData = async () => {
-    const [classesRes, staffRes] = await Promise.all([
+    const [classesRes, staffRes, levelsRes] = await Promise.all([
       supabase.from('classes').select('*').order('name'),
-      supabase.from('staff').select('*').eq('active', true).order('last_name')
+      supabase.from('staff').select('*').eq('active', true).order('last_name'),
+      supabase.from('levels').select('*').order('sort_order')
     ])
     setClasses(classesRes.data || [])
     setStaff(staffRes.data || [])
+    setLevels(levelsRes.data || [])
+  }
+
+  const loadSchoolSettings = async () => {
+    const { data } = await supabase.from('app_settings').select('*')
+    const config = {}
+    data?.forEach(d => { config[d.key] = d.value })
+    setSchoolSettings({
+      school_name: config.school_name || '',
+      address:     config.address     || '',
+      phone:       config.phone       || '',
+      email:       config.email       || '',
+      logo:        config.logo        || '',
+      academic_year: config.academic_year || '2025/2026',
+    })
+  }
+
+  const saveSchoolSettings = async () => {
+    setSavingSchool(true)
+    const entries = [
+      { key: 'school_name', value: schoolSettings.school_name },
+      { key: 'address',     value: schoolSettings.address },
+      { key: 'phone',       value: schoolSettings.phone },
+      { key: 'email',       value: schoolSettings.email },
+      { key: 'logo',        value: schoolSettings.logo },
+      { key: 'academic_year', value: schoolSettings.academic_year },
+    ]
+    for (const entry of entries) {
+      const { error } = await supabase
+        .from('app_settings')
+        .upsert(entry, { onConflict: 'key' })
+      if (error) {
+        toast.error('Failed to save: ' + error.message)
+        setSavingSchool(false)
+        return
+      }
+    }
+    toast.success('School settings saved!')
+    setSavingSchool(false)
+  }
+
+  // ── Nouvelle fonction pour enregistrer le minimum d'admission ─────────────
+  const saveMinPayment = async (levelId, value) => {
+    const amount = parseFloat(value) || 0
+    const { error } = await supabase
+      .from('levels')
+      .update({ min_payment: amount })
+      .eq('id', levelId)
+    if (error) {
+      toast.error('Failed to save minimum payment')
+    } else {
+      toast.success('Minimum payment updated')
+      setLevels(prev => prev.map(l => l.id === levelId ? { ...l, min_payment: amount } : l))
+    }
   }
 
   const handleAddClass = async (e) => {
@@ -89,9 +158,12 @@ export default function SettingsPage() {
       {/* Tabs */}
       <div className="flex gap-2 mb-6 flex-wrap">
         {[
-          { id: 'classes',   label: '🏫 Classes' },
-          { id: 'staff',     label: '👥 Staff' },
-          { id: 'schedules', label: '📅 Fee Schedules' },
+          { id: 'school',       label: '🏫 School' },
+          { id: 'classes',      label: '🏫 Classes' },
+          { id: 'staff',        label: '👥 Staff' },
+          { id: 'feestructure', label: '💲 Fee Structure' },
+          { id: 'schedules',    label: '📅 Fee Schedules' },
+          { id: 'academic', label: '🎓 Academic' },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
@@ -101,9 +173,50 @@ export default function SettingsPage() {
         ))}
       </div>
 
+      {/* ── Tab: School ── */}
+      {activeTab === 'school' && (
+        <div className="bg-white rounded-xl shadow p-6 max-w-2xl">
+          <h2 className="text-lg font-semibold mb-4">School Information</h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">School Name</label>
+              <input type="text" value={schoolSettings.school_name} onChange={e => setSchoolSettings(s => ({ ...s, school_name: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. Bright Future School" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
+              <input type="text" value={schoolSettings.address} onChange={e => setSchoolSettings(s => ({ ...s, address: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. Tamale, Northern Region" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+              <input type="text" value={schoolSettings.phone} onChange={e => setSchoolSettings(s => ({ ...s, phone: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. +233 20 000 0000" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+              <input type="email" value={schoolSettings.email} onChange={e => setSchoolSettings(s => ({ ...s, email: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g. info@brightfuture.edu.gh" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Logo URL (or base64)</label>
+              <input type="text" value={schoolSettings.logo} onChange={e => setSchoolSettings(s => ({ ...s, logo: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="https://... or data:image/png;base64,..." />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+              <select value={schoolSettings.academic_year} onChange={e => setSchoolSettings(s => ({ ...s, academic_year: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="2024/2025">2024/2025</option>
+                <option value="2025/2026">2025/2026</option>
+                <option value="2026/2027">2026/2027</option>
+              </select>
+            </div>
+            <button onClick={saveSchoolSettings} disabled={savingSchool} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
+              {savingSchool ? 'Saving...' : 'Save School Settings'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Tab: Classes ── */}
       {activeTab === 'classes' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Ajout de classe */}
           <div className="bg-white rounded-xl shadow p-6">
             <h2 className="text-lg font-semibold mb-4">Add New Class</h2>
             <form onSubmit={handleAddClass} className="space-y-4">
@@ -132,6 +245,8 @@ export default function SettingsPage() {
               </button>
             </form>
           </div>
+
+          {/* Classes existantes */}
           <div className="bg-white rounded-xl shadow p-6">
             <h2 className="text-lg font-semibold mb-4">Existing Classes ({classes.length})</h2>
             {classes.length === 0 ? (
@@ -153,6 +268,45 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+
+          {/* ─── NOUVEAU : Minimum d'admission par niveau ─── */}
+          <div className="lg:col-span-2 bg-white rounded-xl shadow p-6">
+            <h2 className="text-lg font-semibold mb-4">🔒 Minimum Admission Payment (per Level)</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Define the minimum total payment a student must have before being marked as <strong>Active</strong> and allowed in class lists.
+            </p>
+            {levels.length === 0 ? (
+              <p className="text-gray-400 text-center py-4">No levels configured yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-4 py-2 font-semibold text-gray-600">Level</th>
+                      <th className="text-right px-4 py-2 font-semibold text-gray-600">Minimum Payment (GHS)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {levels.map(level => (
+                      <tr key={level.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-2 font-medium">{level.name}</td>
+                        <td className="px-4 py-2 text-right">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            defaultValue={level.min_payment || 0}
+                            onBlur={e => saveMinPayment(level.id, e.target.value)}
+                            className="w-32 text-right border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -165,38 +319,30 @@ export default function SettingsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
-                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={newStaff.first_name} onChange={e => setNewStaff({...newStaff, first_name: e.target.value})} required />
+                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" value={newStaff.first_name} onChange={e => setNewStaff({...newStaff, first_name: e.target.value})} required />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
-                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={newStaff.last_name} onChange={e => setNewStaff({...newStaff, last_name: e.target.value})} required />
+                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" value={newStaff.last_name} onChange={e => setNewStaff({...newStaff, last_name: e.target.value})} required />
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Position</label>
-                <select className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={newStaff.position} onChange={e => setNewStaff({...newStaff, position: e.target.value})}>
-                  <option>Teacher</option><option>Headmaster</option><option>Accountant</option>
-                  <option>Secretary</option><option>Security</option><option>Janitor</option>
-                  <option>Cook</option><option>Other</option>
+                <select className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" value={newStaff.position} onChange={e => setNewStaff({...newStaff, position: e.target.value})}>
+                  <option>Teacher</option><option>Headmaster</option><option>Accountant</option><option>Secretary</option><option>Security</option><option>Janitor</option><option>Cook</option><option>Other</option>
                 </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-                <input className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={newStaff.phone} onChange={e => setNewStaff({...newStaff, phone: e.target.value})} placeholder="0244123456" />
+                <input className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" value={newStaff.phone} onChange={e => setNewStaff({...newStaff, phone: e.target.value})} placeholder="0244123456" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
-                <input type="email" className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={newStaff.email} onChange={e => setNewStaff({...newStaff, email: e.target.value})} />
+                <input type="email" className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" value={newStaff.email} onChange={e => setNewStaff({...newStaff, email: e.target.value})} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Base Salary (GHS)</label>
-                <input type="number" step="0.01" min="0" className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={newStaff.base_salary} onChange={e => setNewStaff({...newStaff, base_salary: e.target.value})} placeholder="0.00" />
+                <input type="number" step="0.01" min="0" className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" value={newStaff.base_salary} onChange={e => setNewStaff({...newStaff, base_salary: e.target.value})} placeholder="0.00" />
               </div>
               <button type="submit" className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
                 <Plus size={16} /> Add Staff Member
@@ -227,23 +373,28 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* ── Tab: Fee Structure ── */}
+      {activeTab === 'feestructure' && <FeeManagementPage />}
+
       {/* ── Tab: Fee Schedules ── */}
       {activeTab === 'schedules' && <FeeSchedulesTab />}
+
+      {activeTab === 'academic' && <AcademicSettingsTab />}
     </div>
   )
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// FEE SCHEDULES TAB
+// FEE SCHEDULES TAB (complet, fonctionnel)
 // ════════════════════════════════════════════════════════════════════════════
 function FeeSchedulesTab() {
   const [levels, setLevels]           = useState([])
   const [selectedYear, setSelectedYear] = useState('2025/2026')
   const [selectedLevel, setSelectedLevel] = useState('')
   const [feeStructures, setFeeStructures] = useState([])
-  const [schedules, setSchedules]     = useState({}) // { fee_structure_id: [tranches] }
-  const [expanded, setExpanded]       = useState({}) // { fee_structure_id: bool }
-  const [newTranche, setNewTranche]   = useState({}) // { fee_structure_id: { label, due_date, amount } }
+  const [schedules, setSchedules]     = useState({})
+  const [expanded, setExpanded]       = useState({})
+  const [newTranche, setNewTranche]   = useState({})
   const [loading, setLoading]         = useState(false)
   const [saving, setSaving]           = useState(false)
 
@@ -270,7 +421,6 @@ function FeeSchedulesTab() {
 
     setFeeStructures(fees || [])
 
-    // Charger les tranches pour chaque frais
     if (fees?.length) {
       const ids = fees.map(f => f.id)
       const { data: scheds } = await supabase
@@ -286,7 +436,6 @@ function FeeSchedulesTab() {
       })
       setSchedules(grouped)
 
-      // Init newTranche pour chaque frais
       const initTranches = {}
       ids.forEach(id => { initTranches[id] = { label: '', due_date: '', amount: '' } })
       setNewTranche(initTranches)
@@ -303,7 +452,6 @@ function FeeSchedulesTab() {
       return
     }
 
-    // Vérifier que le total ne dépasse pas le montant annuel
     const existingTotal = (schedules[feeStructureId] || []).reduce((s, tr) => s + parseFloat(tr.amount || 0), 0)
     const newAmount     = parseFloat(t.amount)
     if (existingTotal + newAmount > annualAmount) {
@@ -341,14 +489,11 @@ function FeeSchedulesTab() {
 
   return (
     <div className="space-y-5">
-
-      {/* Info box */}
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-700">
         <p className="font-semibold mb-1">📅 Payment Schedule (Échéancier)</p>
         <p>For each fee type, define the exact tranches the school expects parents to pay and when. The total of all tranches must equal the annual fee amount. This schedule is used to calculate "Fees Expected" in all reports.</p>
       </div>
 
-      {/* Filters */}
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1">Academic Year</label>
@@ -371,13 +516,12 @@ function FeeSchedulesTab() {
         )}
       </div>
 
-      {/* Fee structures */}
       {loading ? (
         <div className="flex items-center justify-center py-12"><Loader2 className="animate-spin text-blue-600" size={28} /></div>
       ) : feeStructures.length === 0 ? (
         <div className="bg-white rounded-xl shadow p-12 text-center">
           <p className="text-gray-400 font-medium">No fees configured for {levelName} · {selectedYear}</p>
-          <p className="text-gray-300 text-sm mt-1">Go to Fee Management to add fees first</p>
+          <p className="text-gray-300 text-sm mt-1">Go to Fee Structure to add fees first</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -392,8 +536,6 @@ function FeeSchedulesTab() {
 
             return (
               <div key={fee.id} className="bg-white rounded-xl shadow overflow-hidden">
-
-                {/* Fee header */}
                 <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50"
                   onClick={() => toggleExpand(fee.id)}>
                   <div className="flex items-center gap-3">
@@ -403,7 +545,6 @@ function FeeSchedulesTab() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    {/* Progress */}
                     <div className="text-right">
                       <div className="flex items-center gap-2">
                         <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -422,11 +563,8 @@ function FeeSchedulesTab() {
                   </div>
                 </div>
 
-                {/* Expanded content */}
                 {isOpen && (
                   <div className="border-t border-gray-100 p-4 space-y-4">
-
-                    {/* Existing tranches */}
                     {tranches.length > 0 ? (
                       <table className="w-full text-sm">
                         <thead>
@@ -438,7 +576,7 @@ function FeeSchedulesTab() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {tranches.map((t, idx) => (
+                          {tranches.map((t) => (
                             <tr key={t.id} className="hover:bg-gray-50">
                               <td className="px-3 py-2 font-medium">{t.label}</td>
                               <td className="px-3 py-2 text-gray-600">
@@ -453,7 +591,6 @@ function FeeSchedulesTab() {
                               </td>
                             </tr>
                           ))}
-                          {/* Total row */}
                           <tr className={`${isComplete ? 'bg-green-50' : 'bg-amber-50'}`}>
                             <td colSpan={2} className={`px-3 py-2 text-xs font-bold ${isComplete ? 'text-green-700' : 'text-amber-700'}`}>
                               {isComplete ? '✓ TOTAL = Annual amount' : `TOTAL · GHS ${remaining.toFixed(2)} remaining to allocate`}
@@ -469,7 +606,6 @@ function FeeSchedulesTab() {
                       <p className="text-sm text-gray-400 text-center py-4">No tranches yet — add the first one below</p>
                     )}
 
-                    {/* Add tranche form */}
                     {!isComplete && (
                       <div className="border border-dashed border-blue-300 rounded-lg p-3 bg-blue-50">
                         <p className="text-xs font-semibold text-blue-700 mb-2">+ Add a tranche</p>

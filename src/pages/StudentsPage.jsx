@@ -1,8 +1,9 @@
 // src/pages/StudentsPage.jsx
-import { generateStudentStatement } from '../lib/statementGenerator'
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { logAction } from '../lib/audit'
+
+const FEE_TYPES = ['tuition', 'exam', 'canteen', 'transport', 'uniform', 'other'];
 
 export default function StudentsPage() {
   const [students, setStudents] = useState([])
@@ -15,21 +16,17 @@ export default function StudentsPage() {
   const [form, setForm] = useState({
     first_name: '', last_name: '', class_id: '', date_of_birth: '',
     gender: '', parent_name: '', parent_phone: '',
-    address: '', active: true
+    address: '', active: true, min_payment_override: ''
   })
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
-  // ── États pour le modal du relevé ────────────────────────────────────────
-  const [showStatementModal, setShowStatementModal] = useState(false)
-  const [statementStudent, setStatementStudent] = useState(null)
-  const [statementParams, setStatementParams] = useState({
-    academicYear: '2025/2026',
-    periodType: '1',   // 1=Année académique, 2=Terme, 3=Personnalisé
-    term: 'T1',
-    customFrom: '',
-    customTo: '',
-  })
+  // ── Onglets du modal ────────────────────────────────────────────────────
+  const [modalTab, setModalTab] = useState('info') // 'info' | 'discounts'
+
+  // ── État pour les réductions ───────────────────────────────────────────
+  const [discounts, setDiscounts] = useState([])
+  const [loadingDiscounts, setLoadingDiscounts] = useState(false)
 
   useEffect(() => {
     fetchClasses()
@@ -55,14 +52,115 @@ export default function StudentsPage() {
     setLoading(false)
   }
 
+  // ── Chargement des réductions pour un élève et son niveau ──────────────
+  const loadDiscounts = async (student) => {
+    setLoadingDiscounts(true)
+    // 1. Récupérer le niveau de l'élève
+    if (!student.classes?.name) {
+      setDiscounts([])
+      setLoadingDiscounts(false)
+      return
+    }
+    const className = student.classes.name.trim()
+    const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
+
+    const { data: level } = await supabase
+      .from('levels')
+      .select('id')
+      .ilike('name', levelName)
+      .maybeSingle()
+    if (!level) {
+      setDiscounts([])
+      setLoadingDiscounts(false)
+      return
+    }
+
+    // 2. Récupérer tous les frais actifs pour ce niveau et l'année en cours
+    const academicYear = '2025/2026' // on pourrait le récupérer depuis app_settings
+    const { data: fees } = await supabase
+      .from('fee_structure')
+      .select('id, fee_name, fee_type, amount')
+      .eq('level_id', level.id)
+      .eq('academic_year', academicYear)
+      .eq('is_active', true)
+      .order('fee_name')
+
+    // 3. Récupérer les réductions existantes pour cet élève
+    const { data: existingDiscounts } = await supabase
+      .from('student_fee_discounts')
+      .select('*')
+      .eq('student_id', student.id)
+
+    const discountMap = {}
+    ;(existingDiscounts || []).forEach(d => {
+      discountMap[d.fee_structure_id] = d
+    })
+
+    // 4. Créer la liste complète
+    const list = (fees || []).map(fee => ({
+      fee_structure_id: fee.id,
+      fee_name: fee.fee_name,
+      annual_amount: parseFloat(fee.amount),
+      discount_type: discountMap[fee.id]?.discount_type || 'percentage',
+      discount_value: discountMap[fee.id]?.discount_value || 0,
+    }))
+
+    setDiscounts(list)
+    setLoadingDiscounts(false)
+  }
+
+  // ── Sauvegarde d'une réduction ─────────────────────────────────────────
+  const saveDiscount = async (discount) => {
+    const { fee_structure_id, discount_type, discount_value } = discount
+    const numValue = parseFloat(discount_value) || 0
+    if (numValue < 0) {
+      setMessage('❌ Discount value cannot be negative.')
+      return
+    }
+
+    if (numValue === 0) {
+      // Supprimer la réduction existante
+      const { error } = await supabase
+        .from('student_fee_discounts')
+        .delete()
+        .eq('student_id', editStudent.id)
+        .eq('fee_structure_id', fee_structure_id)
+      if (!error) {
+        setDiscounts(prev => prev.map(d =>
+          d.fee_structure_id === fee_structure_id ? { ...d, discount_value: 0 } : d
+        ))
+      }
+      return
+    }
+
+    const { error } = await supabase
+      .from('student_fee_discounts')
+      .upsert({
+        student_id: editStudent.id,
+        fee_structure_id,
+        discount_type,
+        discount_value: numValue,
+      }, { onConflict: 'student_id, fee_structure_id' })
+
+    if (error) {
+      setMessage('❌ Failed to save discount: ' + error.message)
+    } else {
+      setMessage('✅ Discount saved!')
+      setDiscounts(prev => prev.map(d =>
+        d.fee_structure_id === fee_structure_id ? { ...d, discount_type, discount_value: numValue } : d
+      ))
+    }
+  }
+
   const openAddForm = () => {
     setEditStudent(null)
     setForm({
       first_name: '', last_name: '', class_id: '', date_of_birth: '',
       gender: '', parent_name: '', parent_phone: '',
-      address: '', active: true
+      address: '', active: true, min_payment_override: ''
     })
     setMessage('')
+    setModalTab('info')
     setShowForm(true)
   }
 
@@ -77,9 +175,12 @@ export default function StudentsPage() {
       parent_name:   student.parent_name   || '',
       parent_phone:  student.parent_phone  || '',
       address:       student.address       || '',
-      active:        student.active ?? true
+      active:        student.active ?? true,
+      min_payment_override: student.min_payment_override || ''
     })
     setMessage('')
+    setModalTab('info')
+    loadDiscounts(student)   // charger les réductions
     setShowForm(true)
   }
 
@@ -98,6 +199,7 @@ export default function StudentsPage() {
       parent_phone:  form.parent_phone.trim() || null,
       address:       form.address.trim()      || null,
       active:        form.active,
+      min_payment_override: form.min_payment_override ? parseFloat(form.min_payment_override) : null,
     }
 
     try {
@@ -179,27 +281,6 @@ export default function StudentsPage() {
     } else {
       setMessage(`❌ Error: ${error.message}`)
     }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // Ouvre le modal du relevé de compte (plus de prompts)
-  // ═══════════════════════════════════════════════════════════════════════
-  const handleStatement = (student) => {
-    setStatementStudent({
-      id: student.id,
-      first_name: student.first_name,
-      last_name: student.last_name,
-      class_id: student.class_id,
-      classes: student.classes
-    })
-    setStatementParams({
-      academicYear: '2025/2026',
-      periodType: '1',
-      term: 'T1',
-      customFrom: '',
-      customTo: '',
-    })
-    setShowStatementModal(true)
   }
 
   const filtered = students.filter(s => {
@@ -345,13 +426,6 @@ export default function StudentsPage() {
                           ✏️ Edit
                         </button>
                         <button
-                          onClick={() => handleStatement(student)}
-                          className="text-purple-600 hover:text-purple-800 text-sm
-                                     font-medium px-2 py-1 rounded hover:bg-purple-50"
-                        >
-                          📄 Statement
-                        </button>
-                        <button
                           onClick={() => handleDelete(student.id)}
                           className="text-red-500 hover:text-red-700
                                      text-sm font-medium"
@@ -368,7 +442,7 @@ export default function StudentsPage() {
         )}
       </div>
 
-      {/* ── Modal Formulaire ── */}
+      {/* ── Modal Formulaire (avec onglets) ── */}
       {showForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50
                         flex items-center justify-center z-50 p-4">
@@ -388,253 +462,200 @@ export default function StudentsPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSave} className="p-6 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Onglets (uniquement en édition) */}
+            {editStudent && (
+              <div className="flex gap-2 px-6 pt-4 border-b pb-2">
+                <button
+                  onClick={() => setModalTab('info')}
+                  className={`px-3 py-1 rounded text-sm font-medium ${modalTab === 'info' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+                >Info</button>
+                <button
+                  onClick={() => setModalTab('discounts')}
+                  className={`px-3 py-1 rounded text-sm font-medium ${modalTab === 'discounts' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+                >Discounts</button>
+              </div>
+            )}
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
-                  <input type="text" required value={form.first_name}
-                    onChange={e => setForm({ ...form, first_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                    placeholder="e.g. Kofi" />
+            {modalTab === 'info' && (
+              <form onSubmit={handleSave} className="p-6 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                    <input type="text" required value={form.first_name}
+                      onChange={e => setForm({ ...form, first_name: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      placeholder="e.g. Kofi" />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
+                    <input type="text" required value={form.last_name}
+                      onChange={e => setForm({ ...form, last_name: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      placeholder="e.g. Mensah" />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Class *</label>
+                    <select required value={form.class_id}
+                      onChange={e => setForm({ ...form, class_id: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                      <option value="">Select class</option>
+                      {classes.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
+                    <input type="date" value={form.date_of_birth}
+                      onChange={e => setForm({ ...form, date_of_birth: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+                    <select value={form.gender}
+                      onChange={e => setForm({ ...form, gender: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                      <option value="">Select gender</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                    <select value={form.active}
+                      onChange={e => setForm({ ...form, active: e.target.value === 'true' })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                      <option value="true">Active</option>
+                      <option value="false">Inactive</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Min. Payment Override (GHS)</label>
+                    <input type="number" step="0.01" min="0"
+                      value={form.min_payment_override}
+                      onChange={e => setForm({ ...form, min_payment_override: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      placeholder="Leave empty for default" />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Parent / Guardian Name</label>
+                    <input type="text" value={form.parent_name}
+                      onChange={e => setForm({ ...form, parent_name: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      placeholder="e.g. Ama Mensah" />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Parent Phone</label>
+                    <input type="tel" value={form.parent_phone}
+                      onChange={e => setForm({ ...form, parent_phone: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      placeholder="e.g. 0244000000" />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
+                    <input type="text" value={form.address}
+                      onChange={e => setForm({ ...form, address: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      placeholder="e.g. Tamale, Northern Region" />
+                  </div>
+
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
-                  <input type="text" required value={form.last_name}
-                    onChange={e => setForm({ ...form, last_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                    placeholder="e.g. Mensah" />
-                </div>
+                {message && (
+                  <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
+                    message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                    {message}
+                  </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Class *</label>
-                  <select required value={form.class_id}
-                    onChange={e => setForm({ ...form, class_id: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
-                    <option value="">Select class</option>
-                    {classes.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                <div className="flex gap-3 pt-2">
+                  <button type="submit" disabled={saving}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50">
+                    {saving ? '⏳ Saving...' : editStudent ? '✅ Update Student' : '✅ Add Student'}
+                  </button>
+                  <button type="button" onClick={() => setShowForm(false)}
+                    className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* ── Onglet Discounts ── */}
+            {modalTab === 'discounts' && (
+              <div className="p-6 space-y-4">
+                <h3 className="font-semibold text-gray-900">Fee Adjustments for {editStudent?.first_name} {editStudent?.last_name}</h3>
+                {loadingDiscounts ? (
+                  <p className="text-gray-500 text-sm">Loading fees...</p>
+                ) : discounts.length === 0 ? (
+                  <p className="text-gray-400 text-sm">No fees configured for this student's level.</p>
+                ) : (
+                  <div className="space-y-4 max-h-64 overflow-y-auto">
+                    {discounts.map((discount, idx) => (
+                      <div key={idx} className="border rounded-lg p-3 flex items-center gap-3">
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">{discount.fee_name}</p>
+                          <p className="text-xs text-gray-500">Annual: GHS {discount.annual_amount.toFixed(2)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={discount.discount_type}
+                            onChange={e => {
+                              const newList = [...discounts]
+                              newList[idx].discount_type = e.target.value
+                              setDiscounts(newList)
+                            }}
+                            className="border rounded px-2 py-1 text-sm"
+                          >
+                            <option value="percentage">%</option>
+                            <option value="fixed">Fixed</option>
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={discount.discount_value}
+                            onChange={e => {
+                              const newList = [...discounts]
+                              newList[idx].discount_value = e.target.value
+                              setDiscounts(newList)
+                            }}
+                            className="w-24 border rounded px-2 py-1 text-sm text-right"
+                          />
+                          <button
+                            onClick={() => saveDiscount(discount)}
+                            className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
                     ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
-                  <input type="date" value={form.date_of_birth}
-                    onChange={e => setForm({ ...form, date_of_birth: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
-                  <select value={form.gender}
-                    onChange={e => setForm({ ...form, gender: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
-                    <option value="">Select gender</option>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                    <option value="Other">Other</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                  <select value={form.active}
-                    onChange={e => setForm({ ...form, active: e.target.value === 'true' })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
-                    <option value="true">Active</option>
-                    <option value="false">Inactive</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Parent / Guardian Name</label>
-                  <input type="text" value={form.parent_name}
-                    onChange={e => setForm({ ...form, parent_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                    placeholder="e.g. Ama Mensah" />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Parent Phone</label>
-                  <input type="tel" value={form.parent_phone}
-                    onChange={e => setForm({ ...form, parent_phone: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                    placeholder="e.g. 0244000000" />
-                </div>
-
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
-                  <input type="text" value={form.address}
-                    onChange={e => setForm({ ...form, address: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                    placeholder="e.g. Tamale, Northern Region" />
-                </div>
-
+                  </div>
+                )}
+                {message && (
+                  <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
+                    message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                    {message}
+                  </div>
+                )}
+                <button onClick={() => setShowForm(false)} className="text-sm text-blue-600 hover:underline">Close</button>
               </div>
-
-              {message && (
-                <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
-                  message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
-                  {message}
-                </div>
-              )}
-
-              <div className="flex gap-3 pt-2">
-                <button type="submit" disabled={saving}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50">
-                  {saving ? '⏳ Saving...' : editStudent ? '✅ Update Student' : '✅ Add Student'}
-                </button>
-                <button type="button" onClick={() => setShowForm(false)}
-                  className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
-                  Cancel
-                </button>
-              </div>
-            </form>
-
+            )}
           </div>
         </div>
       )}
-
-      {/* ── Modal du relevé de compte ── */}
-      {showStatementModal && statementStudent && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10">
-              <h3 className="text-lg font-bold text-gray-900">📄 Student Statement</h3>
-              <button onClick={() => setShowStatementModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              {/* Student info (read-only) */}
-              <div className="bg-gray-50 rounded-lg p-3">
-                <p className="text-sm font-medium text-gray-900">
-                  {statementStudent.first_name} {statementStudent.last_name}
-                </p>
-                <p className="text-xs text-gray-500">{statementStudent.classes?.name || 'No class'}</p>
-              </div>
-
-              {/* Academic Year */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                <select
-                  value={statementParams.academicYear}
-                  onChange={e => setStatementParams({ ...statementParams, academicYear: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                >
-                  <option value="2024/2025">2024/2025</option>
-                  <option value="2025/2026">2025/2026</option>
-                  <option value="2026/2027">2026/2027</option>
-                </select>
-              </div>
-
-              {/* Period Type */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label>
-                <select
-                  value={statementParams.periodType}
-                  onChange={e => setStatementParams({ ...statementParams, periodType: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                >
-                  <option value="1">Full Academic Year</option>
-                  <option value="2">Term</option>
-                  <option value="3">Custom</option>
-                </select>
-              </div>
-
-              {/* Term selector (si type 2) */}
-              {statementParams.periodType === '2' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Term</label>
-                  <select
-                    value={statementParams.term}
-                    onChange={e => setStatementParams({ ...statementParams, term: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                  >
-                    <option value="T1">Term 1</option>
-                    <option value="T2">Term 2</option>
-                    <option value="T3">Term 3</option>
-                  </select>
-                </div>
-              )}
-
-              {/* Dates personnalisées (si type 3) */}
-              {statementParams.periodType === '3' && (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Date from</label>
-                    <input
-                      type="date"
-                      value={statementParams.customFrom}
-                      onChange={e => setStatementParams({ ...statementParams, customFrom: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Date to</label>
-                    <input
-                      type="date"
-                      value={statementParams.customTo}
-                      onChange={e => setStatementParams({ ...statementParams, customTo: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                    />
-                  </div>
-                </>
-              )}
-
-              {/* Bouton Generate */}
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowStatementModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const { data: settings } = await supabase.from('app_settings').select('*')
-                    const config = {}
-                    settings?.forEach(d => { config[d.key] = d.value })
-
-                    // Déterminer les dates
-                    let period = 'full', customFrom = null, customTo = null
-                    if (statementParams.periodType === '2') {
-                      period = statementParams.term
-                    } else if (statementParams.periodType === '3') {
-                      period = 'custom'
-                      customFrom = statementParams.customFrom
-                      customTo = statementParams.customTo
-                    }
-
-                    setShowStatementModal(false)
-                    await generateStudentStatement({
-                      student: statementStudent,
-                      academicYear: statementParams.academicYear,
-                      period,
-                      customFrom,
-                      customTo,
-                      schoolConfig: {
-                        school_name: config.school_name || 'BRIGHT FUTURE SCHOOL',
-                        address:     config.address     || 'Tamale, Northern Region',
-                        phone:       config.phone       || '+233 20 000 0000',
-                        email:       config.email       || '',
-                        logo:        config.logo        || null,
-                      },
-                    })
-                  }}
-                  className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium text-sm disabled:opacity-50"
-                >
-                  Generate Statement
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   )
 }

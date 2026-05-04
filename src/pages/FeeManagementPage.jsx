@@ -1,8 +1,5 @@
 // src/pages/FeeManagementPage.jsx
-// Corrections appliquées :
-// [1] generateYears() — currentYear est TOUJOURS placé en premier → sélectionné par défaut
-// [2] Fallback : si app_settings vide, on détecte l'année depuis les fee_payments existants
-// [3] Fallback niveau : on ne présélectionne pas KG 1 aveuglément — on attend les données
+// Ajout de "required_for_admission" (colonne, formulaire, chargement)
 
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
@@ -14,8 +11,6 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
   CurrencyDollarIcon,
-  AcademicCapIcon,
-  CalendarIcon,
 } from '@heroicons/react/24/outline';
 
 const FEE_TYPES = ['tuition', 'exam', 'canteen', 'transport', 'uniform', 'other'];
@@ -28,42 +23,20 @@ const FEE_TYPE_COLORS = {
   canteen: 'bg-green-100 text-green-800', transport: 'bg-yellow-100 text-yellow-800',
   uniform: 'bg-pink-100 text-pink-800', other: 'bg-gray-100 text-gray-800',
 };
-const EMPTY_FEE_FORM = { fee_name: '', fee_type: 'tuition', amount: '', is_mandatory: true, is_active: true };
+const EMPTY_FEE_FORM = {
+  fee_name: '',
+  fee_type: 'tuition',
+  amount: '',
+  is_mandatory: true,
+  is_active: true,
+  required_for_admission: false,   // <-- ajouté
+};
 
 export default function FeeManagementPage() {
-  const [activeTab, setActiveTab] = useState('structure');
-  return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Fee Management</h1>
-        <p className="text-sm text-gray-500 mt-1">Manage fee structures, payment schedules, and collect payments</p>
-      </div>
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
-          {[
-            { id: 'structure',  label: 'Fee Structure',      icon: CurrencyDollarIcon },
-            { id: 'schedules',  label: 'Payment Schedules',  icon: CalendarIcon },
-            { id: 'collection', label: 'Fee Collection',     icon: AcademicCapIcon },
-          ].map(({ id, label, icon: Icon }) => (
-            <button key={id} onClick={() => setActiveTab(id)}
-              className={`flex items-center gap-2 py-4 px-1 border-b-2 text-sm font-medium transition-colors ${
-                activeTab === id
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}>
-              <Icon className="h-4 w-4" />{label}
-            </button>
-          ))}
-        </nav>
-      </div>
-      {activeTab === 'structure'  && <FeeStructureTab />}
-      {activeTab === 'schedules'  && <PaymentSchedulesTab />}
-      {activeTab === 'collection' && <FeeCollectionTab />}
-    </div>
-  );
+  return <FeeStructureTab />;
 }
 
-// ─── TAB 1: FEE STRUCTURE ────────────────────────────────────────────────────
+// ─── TAB: FEE STRUCTURE ────────────────────────────────────────────────────
 function FeeStructureTab() {
   const [levels, setLevels]               = useState([]);
   const [academicYears, setAcademicYears] = useState([]);
@@ -81,22 +54,19 @@ function FeeStructureTab() {
     if (selectedYear && selectedLevel) loadFees(selectedYear, selectedLevel);
   }, [selectedYear, selectedLevel]);
 
-  // [FIX #1] generateYears — currentYear est TOUJOURS premier dans la liste
   function generateYears(currentYear) {
     if (!currentYear) return ['2024/2025', '2025/2026'];
     const match = currentYear.match(/(\d{4})\/(\d{4})/);
     if (!match) return [currentYear];
     const start = parseInt(match[1]);
-    // currentYear est TOUJOURS en position 0 → sélectionné par défaut
     return [
       currentYear,
-      `${start - 1}/${start}`,      // année précédente
-      `${start + 1}/${start + 2}`,  // année suivante
+      `${start - 1}/${start}`,
+      `${start + 1}/${start + 2}`,
     ];
   }
 
   async function loadInitialData() {
-    // Charger les niveaux
     const { data: lvls } = await supabase
       .from('levels')
       .select('id, name, cycle, sort_order')
@@ -104,7 +74,6 @@ function FeeStructureTab() {
       .order('sort_order');
     setLevels(lvls || []);
 
-    // [FIX #1] Lire l'année depuis app_settings
     const { data: setting } = await supabase
       .from('app_settings')
       .select('value')
@@ -113,7 +82,6 @@ function FeeStructureTab() {
 
     let currentYear = setting?.value?.current_year || '';
 
-    // [FIX #2] Fallback : détecter l'année depuis fee_payments si app_settings vide
     if (!currentYear) {
       const { data: fpRow } = await supabase
         .from('fee_payments')
@@ -124,7 +92,6 @@ function FeeStructureTab() {
       currentYear = fpRow?.academic_year || '';
     }
 
-    // [FIX #2] Fallback final : année courante calculée
     if (!currentYear) {
       const now = new Date();
       const y = now.getFullYear();
@@ -134,14 +101,12 @@ function FeeStructureTab() {
     const years = generateYears(currentYear);
     setAcademicYears(years);
 
-    // [FIX #1+3] currentYear est en index 0 → toujours sélectionné par défaut
     const finalYear  = years[0];
     const finalLevel = lvls?.[0]?.id || '';
 
     setSelectedYear(finalYear);
     setSelectedLevel(finalLevel);
 
-    // Chargement direct (évite race condition useEffect)
     if (finalYear && finalLevel) {
       await loadFees(finalYear, finalLevel);
     }
@@ -151,7 +116,7 @@ function FeeStructureTab() {
     setLoading(true);
     const { data, error } = await supabase
       .from('fee_structure')
-      .select('id, fee_name, fee_type, amount, is_mandatory, is_active, academic_year, levels(name)')
+      .select('id, fee_name, fee_type, amount, is_mandatory, is_active, required_for_admission, academic_year, levels(name)')
       .eq('level_id', level)
       .eq('academic_year', year)
       .order('is_mandatory', { ascending: false })
@@ -161,18 +126,23 @@ function FeeStructureTab() {
   }
 
   async function handleSaveFee(formData) {
-    const payload = { ...formData, amount: parseFloat(formData.amount), level_id: selectedLevel, academic_year: selectedYear };
+    const payload = {
+      ...formData,
+      amount: parseFloat(formData.amount),
+      level_id: selectedLevel,
+      academic_year: selectedYear,
+      required_for_admission: formData.required_for_admission || false,
+    };
     let error;
     if (editingFee) {
       ({ error } = await supabase.from('fee_structure').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', editingFee.id));
     } else {
       ({ error } = await supabase.from('fee_structure').insert(payload));
     }
-    if (error) { 
-  console.error('FULL ERROR:', JSON.stringify(error));
-  showToastMsg('Error: ' + error.message + ' | ' + error.details + ' | ' + error.hint, 'error'); 
-}
-    else {
+    if (error) {
+      console.error('FULL ERROR:', JSON.stringify(error));
+      showToastMsg('Error: ' + error.message + ' | ' + error.details + ' | ' + error.hint, 'error');
+    } else {
       showToastMsg(editingFee ? 'Fee updated' : 'Fee created', 'success');
       setShowModal(false);
       setEditingFee(null);
@@ -230,7 +200,6 @@ function FeeStructureTab() {
               {levels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </div>
-          {/* [FIX] Indicator: shows which year/level is active */}
           {selectedYear && selectedLevel && (
             <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
               <span className="font-semibold">Viewing:</span> {selectedLevelName} · {selectedYear}
@@ -291,8 +260,8 @@ function FeeStructureTab() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                {['Fee Name','Type','Amount','Mandatory','Status','Actions'].map(h => (
-                  <th key={h} className={`text-xs font-semibold text-gray-500 uppercase px-6 py-3 ${h === 'Amount' ? 'text-right' : h === 'Mandatory' || h === 'Status' || h === 'Actions' ? 'text-center' : 'text-left'}`}>{h}</th>
+                {['Fee Name','Type','Amount','Mandatory','Admission','Status','Actions'].map(h => (
+                  <th key={h} className={`text-xs font-semibold text-gray-500 uppercase px-6 py-3 ${h === 'Amount' ? 'text-right' : h === 'Mandatory' || h === 'Admission' || h === 'Status' || h === 'Actions' ? 'text-center' : 'text-left'}`}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -312,6 +281,11 @@ function FeeStructureTab() {
                     {fee.is_mandatory
                       ? <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Required</span>
                       : <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">Optional</span>}
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    {fee.required_for_admission
+                      ? <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">Yes</span>
+                      : <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">No</span>}
                   </td>
                   <td className="px-6 py-4 text-center">
                     <button onClick={() => handleToggleActive(fee)}
@@ -341,7 +315,7 @@ function FeeStructureTab() {
                 <td className="px-6 py-3 text-right font-bold text-gray-900">
                   GHS {(totalMandatory + totalOptional).toLocaleString('en-GH', { minimumFractionDigits: 2 })}
                 </td>
-                <td colSpan={3} />
+                <td colSpan={4} />
               </tr>
             </tfoot>
           </table>
@@ -364,8 +338,16 @@ function FeeStructureTab() {
 // ─── Modal ───────────────────────────────────────────────────────────────────
 function FeeFormModal({ fee, levelName, academicYear, onSave, onClose }) {
   const [form, setForm] = useState(
-    fee ? { fee_name: fee.fee_name, fee_type: fee.fee_type, amount: fee.amount, is_mandatory: fee.is_mandatory, is_active: fee.is_active }
-        : EMPTY_FEE_FORM
+    fee
+      ? {
+          fee_name: fee.fee_name,
+          fee_type: fee.fee_type,
+          amount: fee.amount,
+          is_mandatory: fee.is_mandatory,
+          is_active: fee.is_active,
+          required_for_admission: fee.required_for_admission || false,
+        }
+      : EMPTY_FEE_FORM
   );
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
@@ -423,7 +405,7 @@ function FeeFormModal({ fee, levelName, academicYear, onSave, onClose }) {
             </div>
             {errors.amount && <p className="text-red-500 text-xs mt-1">{errors.amount}</p>}
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <label className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
               <input type="checkbox" checked={form.is_mandatory} onChange={e => setForm({ ...form, is_mandatory: e.target.checked })} className="h-4 w-4 text-blue-600 rounded" />
               <span className="text-sm font-medium text-gray-700">Mandatory</span>
@@ -431,6 +413,10 @@ function FeeFormModal({ fee, levelName, academicYear, onSave, onClose }) {
             <label className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
               <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="h-4 w-4 text-blue-600 rounded" />
               <span className="text-sm font-medium text-gray-700">Active</span>
+            </label>
+            <label className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+              <input type="checkbox" checked={form.required_for_admission || false} onChange={e => setForm({ ...form, required_for_admission: e.target.checked })} className="h-4 w-4 text-blue-600 rounded" />
+              <span className="text-sm font-medium text-gray-700">Required for admission</span>
             </label>
           </div>
           {!form.is_mandatory && (
@@ -446,27 +432,6 @@ function FeeFormModal({ fee, levelName, academicYear, onSave, onClose }) {
           </div>
         </form>
       </div>
-    </div>
-  );
-}
-
-// ─── TAB 2 & 3: Placeholders ─────────────────────────────────────────────────
-function PaymentSchedulesTab() {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-16 text-center">
-      <CalendarIcon className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-      <p className="text-gray-500 font-medium">Payment Schedules</p>
-      <p className="text-gray-400 text-sm mt-1">Coming next...</p>
-    </div>
-  );
-}
-
-function FeeCollectionTab() {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-16 text-center">
-      <AcademicCapIcon className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-      <p className="text-gray-500 font-medium">Fee Collection</p>
-      <p className="text-gray-400 text-sm mt-1">Coming next...</p>
     </div>
   );
 }

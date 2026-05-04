@@ -1,6 +1,8 @@
 // src/lib/receiptGenerator.js
 // Génère un reçu de paiement PDF A5 directement dans le navigateur
 // Format N° reçu : PAYAAAANNNNmmm ex: PAY20260001JAN
+// Prend en compte les réductions individuelles (student_fee_discounts)
+// et corrige la correspondance entre les paiements et les colonnes du résumé.
 
 import { jsPDF } from 'jspdf'
 import { supabase } from './supabase'
@@ -68,7 +70,7 @@ export async function generateReceiptNumber() {
   return data
 }
 
-// ── Récupération de la structure annuelle des frais pour le niveau d’un élève ─
+// ── Récupération de la structure annuelle des frais (avec ID) ────────────────
 async function getAnnualFeeStructure(student, academicYear) {
   const className = (student.classes?.name || '').trim()
   if (!className) return []
@@ -85,7 +87,7 @@ async function getAnnualFeeStructure(student, academicYear) {
 
   const { data: fees } = await supabase
     .from('fee_structure')
-    .select('fee_name, fee_type, amount')
+    .select('id, fee_name, fee_type, amount')
     .eq('level_id', level.id)
     .eq('academic_year', academicYear)
     .eq('is_active', true)
@@ -93,20 +95,25 @@ async function getAnnualFeeStructure(student, academicYear) {
   if (!fees?.length) return []
 
   return fees.map(f => ({
+    id: f.id,                        // ← pour lier avec les réductions
     label: f.fee_name,
     type: f.fee_type,
     annual: parseFloat(f.amount),
   }))
 }
 
-// ── Historique paiements élève (inclut les lignes détaillées) ────────────────
+// ── Historique paiements élève ───────────────────────────────────────────────
 async function getStudentPaymentHistory(studentId, academicYear) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('fee_payments')
-    .select('amount, payment_type, status, fee_items')
+    .select('amount, payment_type, status, fee_items, payment_date')
     .eq('student_id', studentId)
     .eq('academic_year', academicYear)
     .in('status', ['paid', 'partial'])
+
+  if (error) {
+    console.error('Error fetching payment history:', error)
+  }
   return data || []
 }
 
@@ -127,8 +134,7 @@ export async function printReceipt(payment, schoolConfig = {}) {
   const className       = student.classes?.name || '—'
   const studentName     = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '—'
   const receiptNo       = payment.receipt_number
-  const payDate         = fmtDate(payment.created_at)
-  const term            = payment.term           || '—'
+  const payDate         = payment.payment_date ? fmtDate(payment.payment_date) : fmtDate(payment.created_at)
   const year            = payment.academic_year  || '—'
   const method          = payment.payment_method || 'Cash'
   const status          = payment.status         || 'paid'
@@ -136,7 +142,7 @@ export async function printReceipt(payment, schoolConfig = {}) {
   const amountPaidToday = parseFloat(payment.amount || 0)
   const paymentType     = payment.payment_type   || 'Tuition'
 
-  // ── Lignes de frais du jour (fournies par FeesPage) ──────────────────────
+  // ── Lignes de frais du jour ──────────────────────────────────────────────
   const feeItems = Array.isArray(payment.feeItems) && payment.feeItems.length > 0
     ? payment.feeItems.map(item => ({
         description: item.description || item.type || 'Tuition',
@@ -144,39 +150,63 @@ export async function printReceipt(payment, schoolConfig = {}) {
         paid:        parseFloat(item.paid || item.amount || 0),
       }))
     : [{
-        description: paymentType + ' — ' + term + ' (' + year + ')',
+        description: paymentType + ' (' + year + ')',
         expected:    amountPaidToday,
         paid:        amountPaidToday,
       }]
 
-  // ═══════════════ RÉCUPÉRATION DE LA STRUCTURE ANNUELLE ═════════════════
+  // ── Récupérer la structure annuelle et les réductions ────────────────────
   const annualStructure = await getAnnualFeeStructure(student, year)
 
-  // À partir de la structure annuelle, on construit feeTypes pour le tableau du bas
-  const feeTypes = annualStructure.length > 0 ? annualStructure : [
-    { label: 'Tuition', type: 'tuition', annual: 0 } // fallback
+  // Récupérer les réductions de l'élève
+  const { data: discounts } = await supabase
+    .from('student_fee_discounts')
+    .select('fee_structure_id, discount_type, discount_value')
+    .eq('student_id', payment.student_id)
+
+  const discountMap = {}
+  ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
+
+  // Appliquer les réductions sur la structure annuelle
+  const adjustedStructure = annualStructure.map(f => {
+    let amount = f.annual
+    const disc = discountMap[f.id]
+    if (disc) {
+      if (disc.discount_type === 'fixed') {
+        amount = Math.max(0, amount - parseFloat(disc.discount_value))
+      } else {
+        amount = amount * (1 - parseFloat(disc.discount_value) / 100)
+      }
+    }
+    return { ...f, annual: parseFloat(amount.toFixed(2)) }
+  })
+
+  const feeTypes = adjustedStructure.length > 0 ? adjustedStructure : [
+    { label: 'Tuition', type: 'tuition', annual: 0 }
   ]
 
-  // ── Historique complet des paiements de l'élève ──────────────────────────
+  // ── Historique complet des paiements ─────────────────────────────────────
   const history = await getStudentPaymentHistory(payment.student_id, year)
 
-  // Calcul des totaux payés par type en tenant compte des paiements multiples
+  // Totaux payés par type ET par label
   const paidByType = {}
+  const paidByLabel = {}
   history.forEach(p => {
-    // Si fee_items existe et est non vide, on ventile chaque ligne
     if (p.fee_items && Array.isArray(p.fee_items) && p.fee_items.length > 0) {
       p.fee_items.forEach(fi => {
-        const key = (fi.type || '').toLowerCase()
-        paidByType[key] = (paidByType[key] || 0) + parseFloat(fi.amount || 0)
+        const typeKey = (fi.type || '').toLowerCase()
+        const labelKey = (fi.type || '').toLowerCase()   // dans fee_items, "type" est en réalité le nom complet (label)
+        paidByType[typeKey] = (paidByType[typeKey] || 0) + parseFloat(fi.amount || 0)
+        paidByLabel[labelKey] = (paidByLabel[labelKey] || 0) + parseFloat(fi.amount || 0)
       })
     } else {
-      // Paiement simple (ancien format)
       const key = (p.payment_type || '').toLowerCase()
       paidByType[key] = (paidByType[key] || 0) + parseFloat(p.amount || 0)
+      paidByLabel[key] = (paidByLabel[key] || 0) + parseFloat(p.amount || 0)
     }
   })
 
-  const totalAnnualDue = annualStructure.reduce((s, ft) => s + ft.annual, 0)
+  const totalAnnualDue = feeTypes.reduce((s, ft) => s + ft.annual, 0)
   const totalPaidAll   = history.reduce((s, p) => s + parseFloat(p.amount || 0), 0)
   const totalBalance   = Math.max(0, totalAnnualDue - totalPaidAll)
 
@@ -212,15 +242,17 @@ export async function printReceipt(payment, schoolConfig = {}) {
   const col2 = M + CW / 2 + 2
   const infoRows = [
     ['Student',    studentName,  'Academic Year', year],
-    ['Student ID', payment.student_id?.slice(0,8)?.toUpperCase() || '—', 'Term', term],
-    ['Class',      className,    'Method',        method],
+    ['Student ID', payment.student_id?.slice(0,8)?.toUpperCase() || '—', 'Method',        method],
+    ['Class',      className,    '',             ''],
   ]
   let iy = y + 6
   infoRows.forEach(([l1, v1, l2, v2]) => {
     text(doc, l1 + ':', M + 2, iy, { size: 7, style: 'bold', color: DGRAY })
     text(doc, v1, M + 19, iy, { size: 7.5, color: BLACK })
-    text(doc, l2 + ':', col2, iy, { size: 7, style: 'bold', color: DGRAY })
-    text(doc, v2, col2 + 19, iy, { size: 7.5, color: BLACK })
+    if (l2) {
+      text(doc, l2 + ':', col2, iy, { size: 7, style: 'bold', color: DGRAY })
+      text(doc, v2, col2 + 19, iy, { size: 7.5, color: BLACK })
+    }
     iy += 7
   })
   y += 27
@@ -254,7 +286,7 @@ export async function printReceipt(payment, schoolConfig = {}) {
   y = paidY
 
   // ════════════════════════════════════════════════════════════════════════
-  // 5. RÉCAPITULATIF DU COMPTE PAR PRESTATION (taille réduite)
+  // 5. RÉCAPITULATIF DU COMPTE PAR PRESTATION (avec réductions)
   // ════════════════════════════════════════════════════════════════════════
   if (feeTypes.length > 0) {
     hline(doc, y, BLUE_L, 0.5)
@@ -278,10 +310,14 @@ export async function printReceipt(payment, schoolConfig = {}) {
       { size: 5.5, style: 'bold', color: WHITE, align: 'right' })
     y += 5
 
-    // Calcul correct des valeurs par type
+    // Calcul des valeurs par type – utilise le label en priorité pour correspondre aux paiements récents
     const valsAnnual = feeTypes.map(ft => ft.annual)
-    const valsPaid   = feeTypes.map(ft => paidByType[(ft.type || '').toLowerCase()] || 0)
-    const valsBalance = feeTypes.map(ft => Math.max(0, ft.annual - (paidByType[(ft.type || '').toLowerCase()] || 0)))
+    const valsPaid   = feeTypes.map(ft => {
+      const byLabel = paidByLabel[(ft.label || '').toLowerCase()] || 0
+      const byType  = paidByType[(ft.type || '').toLowerCase()] || 0
+      return byLabel > 0 ? byLabel : byType
+    })
+    const valsBalance = feeTypes.map((ft, i) => Math.max(0, ft.annual - valsPaid[i]))
 
     const summaryRows = [
       {
@@ -352,7 +388,7 @@ export async function printReceipt(payment, schoolConfig = {}) {
   text(doc, 'Computer-generated receipt — valid without stamp.  SMS confirmation sent to parent.',
     A5_W / 2, A5_H - 3.5, { size: 6, color: [180, 210, 245], align: 'center' })
 
-  // ── Ouverture dans nouvel onglet (sans téléchargement) ────────────────────
+  // ── Ouverture dans nouvel onglet ────────────────────────────────────────
   const blob = doc.output('blob')
   const url  = URL.createObjectURL(blob)
   window.open(url, '_blank')
