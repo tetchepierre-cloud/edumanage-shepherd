@@ -4,7 +4,7 @@ import { useAuthStore } from '../stores/authStore'
 import {
   LayoutDashboard, Users, CreditCard, Receipt,
   Package, ClipboardList, Settings, LogOut,
-  Menu, X, GraduationCap, DollarSign, FileText, Calendar, ClipboardCheck, ThumbsUp, PenTool, Award   // ← Award ajouté
+  Menu, X, GraduationCap, DollarSign, FileText, Calendar, ClipboardCheck, ThumbsUp, PenTool, Award, Baby, FlaskConical, BarChart3, School, FileSpreadsheet   // ← FileSpreadsheet ajouté
 } from 'lucide-react'
 
 const navItems = [
@@ -16,7 +16,11 @@ const navItems = [
   { to: '/attendance', icon: ClipboardCheck, label: 'Attendance', group: 'Academic' },
   { to: '/behavior', icon: ThumbsUp, label: 'Behavior', group: 'Academic' },
   { to: '/grades', icon: PenTool, label: 'Grade Entry', group: 'Academic' },
-  { to: '/report-cards', icon: Award, label: 'Report Cards', group: 'Academic' },   // ← ajouté
+  { to: '/report-cards', icon: Award, label: 'Report Cards', group: 'Academic' },
+  { to: '/kg-assessments', icon: Baby, label: 'KG Assessments', group: 'Academic' },
+  { to: '/mock-exams', icon: FlaskConical, label: 'Mock Exams', group: 'Academic' },
+  { to: '/bece-tracker', icon: BarChart3, label: 'BECE Tracker', group: 'Academic' },
+  { to: '/promotion', icon: School, label: 'Promotion', group: 'Academic' },
   // ----- Finance & Accounting -----
   { to: '/fees', icon: CreditCard, label: 'School Fees', group: 'Finance' },
   { to: '/expenses', icon: Receipt, label: 'Expenses', group: 'Finance' },
@@ -25,6 +29,7 @@ const navItems = [
   // ----- Administration -----
   { to: '/audit', icon: ClipboardList, label: 'Audit', group: 'Admin' },
   { to: '/settings', icon: Settings, label: 'Settings', group: 'Admin' },
+  { to: '/ges-report', icon: FileSpreadsheet, label: 'GES Report', group: 'Admin' },   // ← ajouté
 ];
 
 export default function Layout() {

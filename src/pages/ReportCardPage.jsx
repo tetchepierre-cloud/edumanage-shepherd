@@ -3,7 +3,16 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { computeTermReport } from '../lib/gradeCalculations';
 import { generateReportCard } from '../lib/reportCardGenerator';
+import { generateKgReportCard } from '../lib/kgReportCardGenerator';
 import { Printer } from 'lucide-react';
+
+const RUBRIC_LABELS = { 'E': 'Emerging', 'D': 'Developing', 'A': 'Achieving', 'Ex': 'Extending' };
+const RUBRIC_COLORS = {
+  'E': 'bg-red-100 text-red-700',
+  'D': 'bg-yellow-100 text-yellow-700',
+  'A': 'bg-blue-100 text-blue-700',
+  'Ex': 'bg-green-100 text-green-700',
+};
 
 export default function ReportCardPage() {
   const [terms, setTerms] = useState([]);
@@ -16,9 +25,14 @@ export default function ReportCardPage() {
   const [loading, setLoading] = useState(false);
   const [school, setSchool] = useState({ name: '', address: '', phone: '' });
 
+  // Nouvel état pour la prévisualisation KG
+  const [kgPreview, setKgPreview] = useState(null); // { student, assessments, attendance }
+
   useEffect(() => {
-    supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number').then(({ data }) => setTerms(data || []));
-    supabase.from('classes').select('id, name').order('name').then(({ data }) => setClasses(data || []));
+    supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
+      .then(({ data }) => setTerms(data || []));
+    supabase.from('classes').select('id, name, level').order('name')
+      .then(({ data }) => setClasses(data || []));
     loadSchoolInfo();
   }, []);
 
@@ -36,37 +50,103 @@ export default function ReportCardPage() {
     }
   }, [selectedClass]);
 
+  const isKgClass = () => {
+    const cls = classes.find(c => c.id === selectedClass);
+    return cls?.level === 'KG';
+  };
+
+  // Charge les données KG pour prévisualisation
+  const loadKgPreview = async (studentId, termId) => {
+    // Infos de l'élève
+    const { data: student } = await supabase
+      .from('students')
+      .select('first_name, last_name, date_of_birth')
+      .eq('id', studentId)
+      .single();
+
+    // Évaluations KG du terme
+    const { data: assessments } = await supabase
+      .from('kg_assessments')
+      .select('domain, rubric')
+      .eq('student_id', studentId)
+      .eq('term_id', termId);
+
+    // Présence sur le terme
+    const { data: termData } = await supabase
+      .from('academic_terms')
+      .select('start_date, end_date')
+      .eq('id', termId)
+      .single();
+
+    let attendance = { present: 0, absent: 0, late: 0, excused: 0, total: 0 };
+    if (termData) {
+      const { data: atts } = await supabase
+        .from('attendance')
+        .select('status')
+        .eq('student_id', studentId)
+        .gte('date', termData.start_date)
+        .lte('date', termData.end_date);
+      (atts || []).forEach(a => {
+        attendance.total++;
+        if (a.status === 'P') attendance.present++;
+        else if (a.status === 'A') attendance.absent++;
+        else if (a.status === 'L') attendance.late++;
+        else if (a.status === 'E') attendance.excused++;
+      });
+    }
+
+    setKgPreview({ student, assessments: assessments || [], attendance });
+  };
+
   const handleCompute = async () => {
     if (!selectedStudent || !selectedTerm) return;
     setLoading(true);
-    const rep = await computeTermReport(selectedStudent, selectedTerm);
-    setReport(rep);
+    setKgPreview(null);
+    setReport(null);
+
+    if (isKgClass()) {
+      await loadKgPreview(selectedStudent, selectedTerm);
+    } else {
+      const rep = await computeTermReport(selectedStudent, selectedTerm);
+      setReport(rep);
+    }
     setLoading(false);
   };
 
   const handlePrint = async () => {
-    if (!report || !selectedStudent || !selectedTerm) return;
+    if (!selectedStudent || !selectedTerm) return;
     const term = terms.find(t => t.id === selectedTerm);
     if (!term) return;
 
-    // Récupérer les infos complètes de l'élève (avec date_of_birth)
-    const { data: fullStudent } = await supabase
-      .from('students')
-      .select('first_name, last_name, date_of_birth')
-      .eq('id', selectedStudent)
-      .single();
+    if (isKgClass()) {
+      const className = classes.find(c => c.id === selectedClass)?.name || '';
+      await generateKgReportCard({
+        studentId: selectedStudent,
+        termId: selectedTerm,
+        className,
+        school,
+      });
+    } else {
+      const { data: fullStudent } = await supabase
+        .from('students')
+        .select('first_name, last_name, date_of_birth')
+        .eq('id', selectedStudent)
+        .single();
 
-    generateReportCard({
-      student: {
-        first_name: fullStudent?.first_name || '—',
-        last_name:  fullStudent?.last_name  || '—',
-        class:      classes.find(c => c.id === selectedClass)?.name || '',
-        date_of_birth: fullStudent?.date_of_birth || '',
-      },
-      report,
-      term,
-      school,
-    });
+      const rep = await computeTermReport(selectedStudent, selectedTerm);
+
+      generateReportCard({
+        student: {
+          first_name: fullStudent?.first_name || '—',
+          last_name:  fullStudent?.last_name  || '—',
+          class:      classes.find(c => c.id === selectedClass)?.name || '',
+          date_of_birth: fullStudent?.date_of_birth || '',
+        },
+        report: rep,
+        term,
+        school,
+      });
+    }
   };
 
   return (
@@ -97,17 +177,93 @@ export default function ReportCardPage() {
           </select>
         </div>
         <button onClick={handleCompute} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Compute</button>
+        <button onClick={handlePrint} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
+          <Printer size={16} /> Print Report Card
+        </button>
       </div>
 
-      {loading && <div className="text-center py-4 text-gray-500">Computing averages...</div>}
+      {loading && <div className="text-center py-4 text-gray-500">Computing...</div>}
 
-      {report && (
+      {/* Prévisualisation KG */}
+      {kgPreview && (
+        <div className="bg-white rounded-xl shadow overflow-hidden">
+          <div className="px-6 py-4 border-b bg-blue-50">
+            <h2 className="font-semibold text-lg">
+              {kgPreview.student?.last_name} {kgPreview.student?.first_name}
+            </h2>
+            <p className="text-xs text-gray-500">
+              Class: {classes.find(c => c.id === selectedClass)?.name || ''} · Term: {terms.find(t => t.id === selectedTerm)?.name || ''}
+            </p>
+          </div>
+
+          <div className="p-4">
+            <h3 className="font-medium text-gray-700 mb-2">Learning Domains</h3>
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="text-left px-4 py-2">Domain</th>
+                  <th className="text-center px-4 py-2">Level</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {kgPreview.assessments.map((a, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className="px-4 py-2">{a.domain}</td>
+                    <td className="px-4 py-2 text-center">
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${RUBRIC_COLORS[a.rubric] || 'bg-gray-100'}`}>
+                        {RUBRIC_LABELS[a.rubric] || a.rubric}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {kgPreview.assessments.length === 0 && (
+                  <tr><td colSpan={2} className="text-center py-4 text-gray-400">No assessments recorded for this term.</td></tr>
+                )}
+              </tbody>
+            </table>
+
+            <h3 className="font-medium text-gray-700 mt-6 mb-2">Attendance</h3>
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-3 text-sm">
+              <div className="bg-gray-50 rounded p-2 text-center">
+                <span className="block text-xs text-gray-500">Present</span>
+                <span className="font-bold">{kgPreview.attendance.present}</span>
+              </div>
+              <div className="bg-gray-50 rounded p-2 text-center">
+                <span className="block text-xs text-gray-500">Absent</span>
+                <span className="font-bold">{kgPreview.attendance.absent}</span>
+              </div>
+              <div className="bg-gray-50 rounded p-2 text-center">
+                <span className="block text-xs text-gray-500">Late</span>
+                <span className="font-bold">{kgPreview.attendance.late}</span>
+              </div>
+              <div className="bg-gray-50 rounded p-2 text-center">
+                <span className="block text-xs text-gray-500">Excused</span>
+                <span className="font-bold">{kgPreview.attendance.excused}</span>
+              </div>
+              <div className="bg-gray-50 rounded p-2 text-center">
+                <span className="block text-xs text-gray-500">Total</span>
+                <span className="font-bold">{kgPreview.attendance.total}</span>
+              </div>
+              <div className="bg-gray-50 rounded p-2 text-center">
+                <span className="block text-xs text-gray-500">Rate</span>
+                <span className="font-bold">
+                  {kgPreview.attendance.total > 0
+                    ? ((kgPreview.attendance.present / kgPreview.attendance.total) * 100).toFixed(1) + '%'
+                    : 'N/A'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Prévisualisation Primary/JHS (inchangée) */}
+      {report && !isKgClass() && (
         <div className="bg-white rounded-xl shadow overflow-hidden">
           <div className="px-6 py-4 border-b flex justify-between items-center">
-            <h2 className="font-semibold">{students.find(s => s.id === selectedStudent)?.last_name} {students.find(s => s.id === selectedStudent)?.first_name}</h2>
-            <button onClick={handlePrint} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
-              <Printer size={16} /> Print Report Card
-            </button>
+            <h2 className="font-semibold">
+              {students.find(s => s.id === selectedStudent)?.last_name} {students.find(s => s.id === selectedStudent)?.first_name}
+            </h2>
           </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
@@ -120,7 +276,7 @@ export default function ReportCardPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {report.subjects.map((sub, idx) => (
+              {report.subjects?.map((sub, idx) => (
                 <tr key={idx}>
                   <td className="px-4 py-2">{sub.subjectName}</td>
                   <td className="px-4 py-2 text-center">{sub.midTermScore ?? '—'}</td>

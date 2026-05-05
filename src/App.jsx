@@ -18,7 +18,12 @@ import ParentPortalPage from './pages/ParentPortalPage'
 import AttendancePage from './pages/AttendancePage'
 import BehaviorPage from './pages/BehaviorPage'
 import GradeEntryPage from './pages/GradeEntryPage'
-import ReportCardPage from './pages/ReportCardPage'   // ← ajouté
+import ReportCardPage from './pages/ReportCardPage'
+import KgAssessmentPage from './pages/KgAssessmentPage'
+import MockExamsPage from './pages/MockExamsPage'
+import BeceTrackerPage from './pages/BeceTrackerPage'
+import PromotionPage from './pages/PromotionPage'
+import GesReportPage from './pages/GesReportPage'   // ← ajouté
 import Layout from './components/Layout'
 
 function PrivateRoute({ children }) {
@@ -54,7 +59,12 @@ export default function App() {
           <Route path="attendance" element={<AttendancePage />} />
           <Route path="behavior" element={<BehaviorPage />} />
           <Route path="grades" element={<GradeEntryPage />} />
-          <Route path="report-cards" element={<ReportCardPage />} />   {/* ← ajouté */}
+          <Route path="report-cards" element={<ReportCardPage />} />
+          <Route path="kg-assessments" element={<KgAssessmentPage />} />
+          <Route path="mock-exams" element={<MockExamsPage />} />
+          <Route path="bece-tracker" element={<BeceTrackerPage />} />
+          <Route path="promotion" element={<PromotionPage />} />
+          <Route path="ges-report" element={<GesReportPage />} />   {/* ← ajouté */}
         </Route>
       </Routes>
     </BrowserRouter>
