@@ -40,9 +40,44 @@ const AddItemModal = ({ onClose, onSuccess, showToast, existingItems }) => {
   const [duplicateStatus, setDuplicateStatus] = useState(null);
   // null | { type: 'exact', name } | { type: 'similar', matches: [] }
 
-  const CATEGORIES = ['Books', 'Stationery', 'Furniture', 'Electronics', 'Cleaning', 'Sports', 'Other'];
-  const UNITS = ['pieces', 'boxes', 'reams', 'sets', 'kg', 'litres', 'rolls', 'packets'];
+  const CATEGORIES = [
+  'Books & Textbooks',
+  'Stationery',
+  'Furniture',
+  'Electronics',
+  'ICT Equipment',
+  'Cleaning Supplies',
+  'Sports & P.E.',
+  'Canteen / Feeding',
+  'Art & Creative',
+  'Uniforms & Clothing',
+  'Health & First Aid',
+  'Transport',
+  'General Supplies',
+  'Other'
+];
 
+const UNITS = [
+  'pieces',
+  'boxes',
+  'reams',
+  'sets',
+  'kg',
+  'litres',
+  'rolls',
+  'packets',
+  'copies',
+  'titles',
+  'units',
+  'bottles',
+  'tubes',
+  'pairs',
+  'dozens',
+  'bags',
+  'cartons',
+  'tins',
+  'packs'
+];
   const checkDuplicate = useCallback((value) => {
     if (!value.trim()) { setDuplicateStatus(null); return; }
     const lower = value.trim().toLowerCase();

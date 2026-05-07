@@ -14,7 +14,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('school')
   const [loadingProfile, setLoadingProfile] = useState(true)
 
-  const [newClass, setNewClass] = useState({ name: '', level: 'KG', capacity: 30 })
+  const [newClass, setNewClass] = useState({ level: '', capacity: 30 })
   const [newStaff, setNewStaff] = useState({
     first_name: '', last_name: '', position: 'Teacher',
     phone: '', email: '', base_salary: ''
@@ -46,7 +46,10 @@ export default function SettingsPage() {
 
   const fetchData = async () => {
     const [classesRes, staffRes, levelsRes] = await Promise.all([
-      supabase.from('classes').select('*').order('name'),
+      supabase
+        .from('classes')
+        .select('*, levels(id, name)')
+        .order('name'),
       supabase.from('staff').select('*').eq('active', true).order('last_name'),
       supabase.from('levels').select('*').order('sort_order')
     ])
@@ -93,7 +96,6 @@ export default function SettingsPage() {
     setSavingSchool(false)
   }
 
-  // ── Nouvelle fonction pour enregistrer le minimum d'admission ─────────────
   const saveMinPayment = async (levelId, value) => {
     const amount = parseFloat(value) || 0
     const { error } = await supabase
@@ -108,12 +110,69 @@ export default function SettingsPage() {
     }
   }
 
+  // ── Création d'une classe avec nommage automatique ──
   const handleAddClass = async (e) => {
     e.preventDefault()
-    const { error } = await supabase.from('classes').insert([newClass])
+
+    const selectedLevel = levels.find(l => l.id === newClass.level)
+    if (!selectedLevel) {
+      toast.error('Please select a grade.')
+      return
+    }
+
+    // Compter les classes existantes pour ce niveau
+    const { count, error: countError } = await supabase
+      .from('classes')
+      .select('*', { count: 'exact', head: true })
+      .eq('level_id', newClass.level)
+
+    if (countError) {
+      toast.error('Error: ' + countError.message)
+      return
+    }
+
+    const existingCount = count || 0
+    let className = ''
+
+    if (existingCount === 0) {
+      // Première classe : juste le nom du niveau (ex: "JHS 1")
+      className = selectedLevel.name
+    } else {
+      // Classes suivantes : le nom du niveau + suffixe A, B, C…
+      // On renomme aussi la PREMIÈRE classe s'il s'agit de la seconde
+      if (existingCount === 1) {
+        // Récupérer la première classe de ce niveau
+        const { data: firstClass, error: firstError } = await supabase
+          .from('classes')
+          .select('id, name')
+          .eq('level_id', newClass.level)
+          .order('name')
+          .limit(1)
+          .single()
+
+        if (!firstError && firstClass && firstClass.name === selectedLevel.name) {
+          // Renommer la première classe en "Niveau A"
+          await supabase
+            .from('classes')
+            .update({ name: `${selectedLevel.name} A` })
+            .eq('id', firstClass.id)
+        }
+      }
+      // Nouvelle classe = Niveau + lettre suivante
+      const suffix = String.fromCharCode(65 + existingCount) // 0→A, 1→B, etc.
+      className = `${selectedLevel.name} ${suffix}`
+    }
+
+    const { error } = await supabase.from('classes').insert([{
+      name: className,
+      level_id: newClass.level,
+      capacity: newClass.capacity,
+    }])
+
     if (error) { toast.error('Error: ' + error.message); return }
-    toast.success('Class added successfully!')
-    setNewClass({ name: '', level: 'KG', capacity: 30 })
+
+    toast.success(`Class "${className}" created!`)
+    setNewClass({ level: '', capacity: 30 })
     fetchData()
   }
 
@@ -163,7 +222,7 @@ export default function SettingsPage() {
           { id: 'staff',        label: '👥 Staff' },
           { id: 'feestructure', label: '💲 Fee Structure' },
           { id: 'schedules',    label: '📅 Fee Schedules' },
-          { id: 'academic', label: '🎓 Academic' },
+          { id: 'academic',     label: '🎓 Academic' },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
@@ -219,20 +278,18 @@ export default function SettingsPage() {
           {/* Ajout de classe */}
           <div className="bg-white rounded-xl shadow p-6">
             <h2 className="text-lg font-semibold mb-4">Add New Class</h2>
+            <p className="text-xs text-gray-400 mb-4">
+              The class name is generated automatically. First class uses the grade name. Subsequent classes receive a suffix (A, B, C…).
+            </p>
             <form onSubmit={handleAddClass} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Class Name *</label>
-                <input className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})}
-                  placeholder="e.g. KG 1, Primary 3, JHS 2" required />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Level</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Grade</label>
                 <select className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   value={newClass.level} onChange={e => setNewClass({...newClass, level: e.target.value})}>
-                  <option value="KG">KG (Kindergarten)</option>
-                  <option value="Primary">Primary</option>
-                  <option value="JHS">JHS (Junior High School)</option>
+                  <option value="">-- Select Grade --</option>
+                  {levels.map(l => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -259,9 +316,8 @@ export default function SettingsPage() {
                       <p className="font-medium text-gray-900">{c.name}</p>
                       <p className="text-xs text-gray-500">Capacity: {c.capacity} students</p>
                     </div>
-                    <span className={`text-xs px-2 py-1 rounded-full font-medium
-                      ${c.level === 'KG' ? 'bg-purple-100 text-purple-700' : c.level === 'Primary' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
-                      {c.level}
+                    <span className="text-xs px-2 py-1 rounded-full font-medium bg-blue-100 text-blue-700">
+                      {c.levels?.name || 'Unknown'}
                     </span>
                   </div>
                 ))}

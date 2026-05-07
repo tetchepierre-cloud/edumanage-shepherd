@@ -4,14 +4,21 @@ import { supabase } from '../lib/supabase'
 import { logAction } from '../lib/audit'
 
 const CATEGORIES = [
-  { value: 'utilities',    label: 'Utilities'    },
-  { value: 'salaries',     label: 'Salaries'     },
-  { value: 'supplies',     label: 'Supplies'     },
-  { value: 'maintenance',  label: 'Maintenance'  },
-  { value: 'transport',    label: 'Transport'    },
-  { value: 'food',         label: 'Food'         },
-  { value: 'other',        label: 'Other'        },
-]
+  { value: 'books_textbooks',    label: 'Books & Textbooks'    },
+  { value: 'stationery',         label: 'Stationery'           },
+  { value: 'furniture',          label: 'Furniture'            },
+  { value: 'electronics',        label: 'Electronics'          },
+  { value: 'ict_equipment',      label: 'ICT Equipment'        },
+  { value: 'cleaning_supplies',  label: 'Cleaning Supplies'    },
+  { value: 'sports_pe',          label: 'Sports & P.E.'        },
+  { value: 'canteen_feeding',    label: 'Canteen / Feeding'    },
+  { value: 'art_creative',       label: 'Art & Creative'       },
+  { value: 'uniforms_clothing',  label: 'Uniforms & Clothing'  },
+  { value: 'health_first_aid',   label: 'Health & First Aid'   },
+  { value: 'transport',          label: 'Transport'            },
+  { value: 'general_supplies',   label: 'General Supplies'     },
+  { value: 'other',              label: 'Other'                },
+];
 
 const PAYMENT_METHODS = [
   { value: 'cash',          label: 'Cash'          },

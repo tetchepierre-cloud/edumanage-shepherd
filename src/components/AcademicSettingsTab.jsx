@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { PlusIcon, TrashIcon, PencilIcon, ChevronDown, ChevronUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-const CYCLES = ['KG', 'Primary', 'JHS'];
+const CYCLES = ['Nursery', 'KG', 'Primary', 'JHS'];
 const ACADEMIC_YEARS = ['2024/2025', '2025/2026', '2026/2027'];
 
 export default function AcademicSettingsTab() {

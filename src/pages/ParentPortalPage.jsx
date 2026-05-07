@@ -41,11 +41,12 @@ export default function ParentPortalPage() {
     const studentId = currentSession.user.user_metadata?.student_id;
     if (!studentId) return;
 
+    // ✅ Utilise maybeSingle() au lieu de single()
     const { data: studentData } = await supabase
       .from('students')
-      .select('id, first_name, last_name, class_id, classes(name)')
+      .select('first_name, last_name, class_id, classes(name)')
       .eq('id', studentId)
-      .single();
+      .maybeSingle();
     setStudent(studentData);
 
     const { data: notifs } = await supabase
@@ -81,12 +82,11 @@ export default function ParentPortalPage() {
       .from('justificatifs')
       .getPublicUrl(fileName);
 
-    // Récupération de l'ID du compte parent
     const { data: parentAccount, error: accountError } = await supabase
       .from('parent_portal_accounts')
       .select('id')
       .eq('student_id', student.id)
-      .single();
+      .maybeSingle();
 
     if (accountError || !parentAccount) {
       setJustifyMessage('Could not verify parent account.');
