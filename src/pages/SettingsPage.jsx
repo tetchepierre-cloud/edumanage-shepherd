@@ -10,7 +10,7 @@ export default function SettingsPage() {
   const [profile, setProfile]     = useState(null)
   const [classes, setClasses]     = useState([])
   const [staff, setStaff]         = useState([])
-  const [levels, setLevels]       = useState([])   // ← AJOUTÉ
+  const [levels, setLevels]       = useState([])
   const [activeTab, setActiveTab] = useState('school')
   const [loadingProfile, setLoadingProfile] = useState(true)
 
@@ -269,7 +269,7 @@ export default function SettingsPage() {
             )}
           </div>
 
-          {/* ─── NOUVEAU : Minimum d'admission par niveau ─── */}
+          {/* ─── Minimum d'admission par niveau ─── */}
           <div className="lg:col-span-2 bg-white rounded-xl shadow p-6">
             <h2 className="text-lg font-semibold mb-4">🔒 Minimum Admission Payment (per Level)</h2>
             <p className="text-sm text-gray-500 mb-4">
@@ -384,9 +384,9 @@ export default function SettingsPage() {
   )
 }
 
-// ════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
 // FEE SCHEDULES TAB (complet, fonctionnel)
-// ════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
 function FeeSchedulesTab() {
   const [levels, setLevels]           = useState([])
   const [selectedYear, setSelectedYear] = useState('2025/2026')
