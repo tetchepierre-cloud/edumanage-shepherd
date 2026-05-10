@@ -52,6 +52,7 @@ export default function ClassListPage() {
       address: config.address || 'Tamale, Ghana',
       phone: config.phone || '',
       email: config.email || '',
+      logo: config.logo || null,       // ← ajouté
     });
   };
 
@@ -110,7 +111,7 @@ export default function ClassListPage() {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => generateClassListPDF({ className: selectedClassName(), students, school })}
+            onClick={async () => { await generateClassListPDF({ className: selectedClassName(), students, school }); }}
             disabled={students.length === 0}
             className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
           >

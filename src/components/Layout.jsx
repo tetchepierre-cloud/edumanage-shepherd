@@ -1,41 +1,71 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../stores/authStore'
 import {
   LayoutDashboard, Users, CreditCard, Receipt,
   Package, ClipboardList, Settings, LogOut,
-  Menu, X, GraduationCap, DollarSign, FileText, Calendar, ClipboardCheck, ThumbsUp, PenTool, Award, Baby, FlaskConical, BarChart3, School, FileSpreadsheet   // ← FileSpreadsheet ajouté
+  Menu, X, GraduationCap, DollarSign, FileText, Calendar, ClipboardCheck, ThumbsUp, PenTool, Award, Baby, FlaskConical, BarChart3, School, FileSpreadsheet
 } from 'lucide-react'
 
-const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true, group: null },
-  // ----- Academic -----
-  { to: '/students', icon: Users, label: 'Students', group: 'Academic' },
-  { to: '/class-list', icon: FileText, label: 'Class List', group: 'Academic' },
-  { to: '/timetable', icon: Calendar, label: 'Timetable', group: 'Academic' },
-  { to: '/attendance', icon: ClipboardCheck, label: 'Attendance', group: 'Academic' },
-  { to: '/behavior', icon: ThumbsUp, label: 'Behavior', group: 'Academic' },
-  { to: '/grades', icon: PenTool, label: 'Grade Entry', group: 'Academic' },
-  { to: '/report-cards', icon: Award, label: 'Report Cards', group: 'Academic' },
-  { to: '/kg-assessments', icon: Baby, label: 'KG Assessments', group: 'Academic' },
-  { to: '/mock-exams', icon: FlaskConical, label: 'Mock Exams', group: 'Academic' },
-  { to: '/bece-tracker', icon: BarChart3, label: 'BECE Tracker', group: 'Academic' },
-  { to: '/promotion', icon: School, label: 'Promotion', group: 'Academic' },
-  // ----- Finance & Accounting -----
-  { to: '/fees', icon: CreditCard, label: 'School Fees', group: 'Finance' },
-  { to: '/expenses', icon: Receipt, label: 'Expenses', group: 'Finance' },
-  { to: '/payroll', icon: DollarSign, label: 'Payroll', group: 'Finance' },
-  { to: '/stock', icon: Package, label: 'Stock', group: 'Finance' },
-  // ----- Administration -----
-  { to: '/audit', icon: ClipboardList, label: 'Audit', group: 'Admin' },
-  { to: '/settings', icon: Settings, label: 'Settings', group: 'Admin' },
-  { to: '/ges-report', icon: FileSpreadsheet, label: 'GES Report', group: 'Admin' },   // ← ajouté
+const allNavItems = [
+  { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true, group: null, module: 'dashboard' },
+  // Academic
+  { to: '/students',       icon: Users,            label: 'Students',         group: 'Academic', module: 'students' },
+  { to: '/class-list',     icon: FileText,         label: 'Class List',       group: 'Academic', module: 'class-list' },
+  { to: '/timetable',      icon: Calendar,         label: 'Timetable',        group: 'Academic', module: 'timetable' },
+  { to: '/attendance',     icon: ClipboardCheck,   label: 'Attendance',       group: 'Academic', module: 'attendance' },
+  { to: '/behavior',       icon: ThumbsUp,         label: 'Behavior',         group: 'Academic', module: 'behavior' },
+  { to: '/grades',         icon: PenTool,          label: 'Grade Entry',      group: 'Academic', module: 'grades' },
+  { to: '/report-cards',   icon: Award,            label: 'Terminal Reports', group: 'Academic', module: 'report-cards' },
+  { to: '/kg-assessments', icon: Baby,             label: 'KG Assessments',   group: 'Academic', module: 'kg-assessments' },
+  { to: '/mock-exams',     icon: FlaskConical,     label: 'Mock Exams',       group: 'Academic', module: 'mock-exams' },
+  { to: '/bece-tracker',   icon: BarChart3,        label: 'BECE Tracker',     group: 'Academic', module: 'bece-tracker' },
+  { to: '/promotion',      icon: School,           label: 'Promotion',        group: 'Academic', module: 'promotion' },
+  // Finance
+  { to: '/fees',     icon: CreditCard,  label: 'School Fees', group: 'Finance', module: 'fees' },
+  { to: '/expenses', icon: Receipt,     label: 'Expenses',    group: 'Finance', module: 'expenses' },
+  { to: '/payroll',  icon: DollarSign,  label: 'Payroll',     group: 'Finance', module: 'payroll' },
+  { to: '/stock',    icon: Package,     label: 'Stock',       group: 'Finance', module: 'stock' },
+  // Administration
+  { to: '/audit',      icon: ClipboardList,    label: 'Audit',      group: 'Admin', module: 'audit' },
+  { to: '/settings',   icon: Settings,         label: 'Settings',   group: 'Admin', module: 'settings' },
+  { to: '/ges-report', icon: FileSpreadsheet,  label: 'GES Report', group: 'Admin', module: 'ges-report' },
 ];
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const { profile, logout } = useAuthStore()
   const navigate = useNavigate()
+  const [permissions, setPermissions] = useState({})
+
+  // Charger les permissions depuis la table module_access
+  useEffect(() => {
+    if (!profile?.role) return
+    supabase
+      .from('module_access')
+      .select('module, can_read')
+      .eq('role', profile.role)
+      .then(({ data }) => {
+        const perms = {}
+        ;(data || []).forEach(p => { perms[p.module] = p.can_read })
+        setPermissions(perms)
+      })
+      .catch(() => {
+        // fallback : tout visible si erreur réseau
+        const all = {}
+        allNavItems.forEach(item => { if (item.module) all[item.module] = true })
+        setPermissions(all)
+      })
+  }, [profile?.role])
+
+  // Filtrer les éléments selon les permissions
+  const navItems = allNavItems.filter(item => {
+    if (item.module === 'dashboard') return true  // Dashboard toujours visible
+    // Si les permissions ne sont pas encore chargées, on affiche tout
+    if (!permissions || Object.keys(permissions).length === 0) return true
+    return permissions[item.module] === true
+  })
 
   const handleLogout = async () => {
     await logout()

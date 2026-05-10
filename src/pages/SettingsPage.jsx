@@ -5,6 +5,7 @@ import { Settings, Plus, Loader2, Trash2, ChevronDown, ChevronUp } from 'lucide-
 import toast from 'react-hot-toast'
 import FeeManagementPage from './FeeManagementPage'
 import AcademicSettingsTab from '../components/AcademicSettingsTab';
+import PermissionsTab from '../components/PermissionsTab';
 
 export default function SettingsPage() {
   const [profile, setProfile]     = useState(null)
@@ -223,6 +224,7 @@ export default function SettingsPage() {
           { id: 'feestructure', label: '💲 Fee Structure' },
           { id: 'schedules',    label: '📅 Fee Schedules' },
           { id: 'academic',     label: '🎓 Academic' },
+          { id: 'permissions',  label: '🔐 Permissions' },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
@@ -436,6 +438,7 @@ export default function SettingsPage() {
       {activeTab === 'schedules' && <FeeSchedulesTab />}
 
       {activeTab === 'academic' && <AcademicSettingsTab />}
+      {activeTab === 'permissions' && <PermissionsTab />}
     </div>
   )
 }

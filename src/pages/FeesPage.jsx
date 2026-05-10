@@ -6,6 +6,7 @@ import { printReceipt, generateReceiptNumber } from '../lib/receiptGenerator'
 import { generateFeesReport } from '../lib/feesReportGenerator'
 import { generateStudentStatement } from '../lib/statementGenerator'
 import { generateDiscountReport } from '../lib/discountReportGenerator'
+import { generateClassBalanceReport } from '../lib/classBalanceReportGenerator'
 
 const PAYMENT_TYPES  = ['Tuition', 'Uniform', 'Books', 'Exam', 'Other']
 const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Bank Transfer', 'Cheque']
@@ -84,6 +85,11 @@ export default function FeesPage() {
   const [showDiscountReportModal, setShowDiscountReportModal] = useState(false)
   const [discountReportYear, setDiscountReportYear] = useState('2025/2026')
 
+  // ── États pour le modal Class Balance ────────────────────────────────
+  const [showClassBalanceModal, setShowClassBalanceModal] = useState(false)
+  const [selectedBalanceClass, setSelectedBalanceClass] = useState('')
+  const [selectedBalanceYear, setSelectedBalanceYear] = useState('2025/2026')
+  
   useEffect(() => { fetchAll(); loadSchoolConfig() }, [])
 
   const loadSchoolConfig = async () => {
@@ -111,7 +117,7 @@ export default function FeesPage() {
   const fetchStudents = async () => {
     const { data } = await supabase
       .from('students')
-      .select('id, first_name, last_name, class_id, classes(name, level)')
+      .select('id, first_name, last_name, class_id, classes(name)')
       .order('first_name')
     setStudents(data || [])
   }
@@ -127,7 +133,7 @@ export default function FeesPage() {
   const fetchPayments = async () => {
     const { data, error } = await supabase
       .from('fee_payments')
-      .select('*, students(first_name, last_name, class_id, classes(name, level))')
+      .select('*, students(first_name, last_name, class_id, classes(name))')
       .order('created_at', { ascending: false })
     if (error) console.error('fetchPayments error:', error)
     setPayments(data || [])
@@ -159,7 +165,7 @@ export default function FeesPage() {
   const getExpectedFeeItems = async (studentId, academicYear) => {
     const { data: student, error: studentErr } = await supabase
       .from('students')
-      .select('class_id, classes(name, level)')
+      .select('class_id, classes(name)')
       .eq('id', studentId)
       .single()
 
@@ -570,7 +576,7 @@ export default function FeesPage() {
 
         const { data: fullPayment } = await supabase
           .from('fee_payments')
-          .select('*, students(first_name, last_name, class_id, classes(name, level))')
+          .select('*, students(first_name, last_name, class_id, classes(name))')
           .eq('id', data.id)
           .single()
 
@@ -677,6 +683,9 @@ export default function FeesPage() {
           <button onClick={handleGenerateReport} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Fees Collection Report">📊 Fees Report</button>
           <button onClick={handleOpenStatementModal} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Student Statement">📄 Statement</button>
           <button onClick={handleOpenDiscountReport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Discount Report">🏷️ Discounts</button>
+          <button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Class Balance Report">
+            📊 Class Balance
+          </button>
         </div>
       </div>
 
@@ -1063,6 +1072,48 @@ export default function FeesPage() {
         </div>
       )}
 
+          {/* ── Modal Class Balance Report ── */}
+      {showClassBalanceModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6 border-b flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-900">📊 Class Balance Report</h3>
+              <button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Class</label>
+                <select value={selectedBalanceClass} onChange={e => setSelectedBalanceClass(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="">-- Select Class --</option>
+                  {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedBalanceYear} onChange={e => setSelectedBalanceYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <button
+                onClick={async () => {
+                  if (!selectedBalanceClass) return
+                  setShowClassBalanceModal(false)
+                  const className = classes.find(c => c.id === selectedBalanceClass)?.name || 'Class'
+                  await generateClassBalanceReport({
+                    className,
+                    classId: selectedBalanceClass,
+                    academicYear: selectedBalanceYear,
+                    schoolConfig,
+                  })
+                }}
+                className="w-full bg-teal-600 text-white py-2 rounded-lg font-medium hover:bg-teal-700"
+              >
+                Generate Report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

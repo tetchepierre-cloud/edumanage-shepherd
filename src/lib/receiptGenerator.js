@@ -96,6 +96,23 @@ export async function printReceipt(payment, schoolConfig = {}) {
     address: schoolConfig.address || 'Tamale, Northern Region',
     phone:   schoolConfig.phone   || '+233 20 000 0000',
     email:   schoolConfig.email   || '',
+    logo:    schoolConfig.logo    || null,
+  }
+
+  // Charger le logo en base64 si une URL est fournie
+  let logoData = null
+  if (school.logo) {
+    try {
+      const response = await fetch(school.logo)
+      const blob = await response.blob()
+      const reader = new FileReader()
+      logoData = await new Promise((resolve) => {
+        reader.onloadend = () => resolve(reader.result)
+        reader.readAsDataURL(blob)
+      })
+    } catch (e) {
+      console.warn('Logo could not be loaded, falling back to placeholder.')
+    }
   }
 
   const student         = payment.students || {}
@@ -134,14 +151,23 @@ export async function printReceipt(payment, schoolConfig = {}) {
 
   let y = 0
 
-  // 1. HEADER
+  // 1. HEADER (logo agrandi ou icône par défaut)
   fillRect(doc, 0, 0, A5_W, 30, BLUE)
-  doc.setFillColor(...WHITE)
-  doc.circle(M + 7, 15, 6, 'F')
-  text(doc, '🏫', M + 3.5, 17, { size: 9, color: BLUE })
-  text(doc, school.name, M + 18, 10, { size: 10, style: 'bold', color: WHITE })
-  text(doc, school.address + (school.phone ? '  |  Tel: ' + school.phone : ''), M + 18, 16, { size: 7, color: [180, 210, 245] })
-  if (school.email) text(doc, school.email, M + 18, 22, { size: 6.5, color: [180, 210, 245] })
+  if (logoData) {
+    const logoSize = 18   // 22,5 × 0,8
+    doc.addImage(logoData, 'JPEG', M + 2, 8, logoSize, logoSize)
+    const textX = M + 2 + logoSize + 2   // démarre après le logo
+    text(doc, school.name, textX, 10, { size: 10, style: 'bold', color: WHITE })
+    text(doc, school.address + (school.phone ? '  |  Tel: ' + school.phone : ''), textX, 16, { size: 7, color: [180, 210, 245] })
+    if (school.email) text(doc, school.email, textX, 22, { size: 6.5, color: [180, 210, 245] })
+  } else {
+    doc.setFillColor(...WHITE)
+    doc.circle(M + 7, 15, 6, 'F')
+    text(doc, '🏫', M + 3.5, 17, { size: 9, color: BLUE })
+    text(doc, school.name, M + 18, 10, { size: 10, style: 'bold', color: WHITE })
+    text(doc, school.address + (school.phone ? '  |  Tel: ' + school.phone : ''), M + 18, 16, { size: 7, color: [180, 210, 245] })
+    if (school.email) text(doc, school.email, M + 18, 22, { size: 6.5, color: [180, 210, 245] })
+  }
   text(doc, 'OFFICIAL PAYMENT RECEIPT', A5_W - M, 26, { size: 7.5, style: 'bold', color: GOLD, align: 'right' })
   y = 34
 

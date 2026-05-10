@@ -22,20 +22,17 @@ function fmtGHS(n) { return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', 
 
 // ── Chargement groupé des classes et élèves ─────────────────────────
 async function loadAllClassesAndStudents({ classIds, levelIds, academicYear }) {
-  // 1. Toutes les classes (filtrées)
-  let classQuery = supabase.from('classes').select('id, name, level').order('name')
+  // 1. Toutes les classes (filtrées) – on a besoin du level_id maintenant
+  let classQuery = supabase.from('classes').select('id, name, level_id').order('name')
   if (classIds?.length) classQuery = classQuery.in('id', classIds)
   else if (levelIds?.length) {
-    const { data: lvls } = await supabase.from('levels').select('name').in('id', levelIds)
-    if (lvls?.length) {
-      const filters = lvls.map(l => `name.ilike.${l.name}%`).join(',')
-      classQuery = classQuery.or(filters)
-    }
+    classQuery = classQuery.in('level_id', levelIds)
   }
   const { data: classes } = await classQuery
-  if (!classes?.length) return { classes: [], students: [], studentIds: [], levelNames: [] }
+  if (!classes?.length) return { classes: [], students: [], studentIds: [], levelNames: [], studentLevelMap: {} }
 
   const classIdsArr = classes.map(c => c.id)
+  // Extraire les noms de niveaux à partir des classes (pour compatibilité)
   const levelNames = [...new Set(classes.map(c => c.name.replace(/\s*[A-Za-z]$/, '').trim()))]
 
   // 2. Tous les élèves actifs de ces classes
@@ -46,11 +43,18 @@ async function loadAllClassesAndStudents({ classIds, levelIds, academicYear }) {
     .eq('active', true)
 
   const studentIds = (students || []).map(s => s.id)
-  return { classes, students: students || [], studentIds, levelNames }
+
+  // Construire une map étudiant → level_id (grâce à la classe)
+  const classLevelMap = {}
+  classes.forEach(c => { classLevelMap[c.id] = c.level_id })
+  const studentLevelMap = {}
+  ;(students || []).forEach(s => { studentLevelMap[s.id] = classLevelMap[s.class_id] })
+
+  return { classes, students: students || [], studentIds, levelNames, studentLevelMap }
 }
 
 // ── Chargement groupé des attendus (schedules + discounts) ──────────
-async function loadExpectedData(levelNames, academicYear, dateTo, studentIds) {
+async function loadExpectedData(levelNames, academicYear, dateTo, studentIds, studentLevelMap) {
   // Levels -> ids
   const { data: levels } = await supabase
     .from('levels')
@@ -90,18 +94,21 @@ async function loadExpectedData(levelNames, academicYear, dateTo, studentIds) {
     .select('student_id, fee_structure_id, discount_type, discount_value')
     .in('student_id', studentIds)
 
-  // Index des discounts par étudiant + fee_structure_id
   const discountIndex = {}
   ;(discounts || []).forEach(d => {
     if (!discountIndex[d.student_id]) discountIndex[d.student_id] = {}
     discountIndex[d.student_id][d.fee_structure_id] = d
   })
 
-  // Construire une map : studentId -> total attendu
+  // Construire une map : studentId -> total attendu (filtré par niveau de l'élève)
   const expectedMap = new Map()
   studentIds.forEach(sid => {
+    const stuLevel = studentLevelMap[sid]   // ← level_id de l'élève
+    if (!stuLevel) return
+
     let total = 0
     fees.forEach(f => {
+      if (f.level_id !== stuLevel) return   // ← on saute les frais qui ne concernent pas ce niveau
       let feeTotal = totalByFee[f.id] || 0
       const disc = discountIndex[sid]?.[f.id]
       if (disc) {
@@ -113,7 +120,6 @@ async function loadExpectedData(levelNames, academicYear, dateTo, studentIds) {
     expectedMap.set(sid, parseFloat(total.toFixed(2)))
   })
 
-  // Pour le mode class, on a aussi besoin du total par niveau (par élève) → on peut réutiliser la même map
   return { expectedMap, levels, fees, totalByFee, discountIndex }
 }
 
@@ -162,10 +168,27 @@ export async function generateFeesReport({
     address: schoolConfig.address || 'Tamale, Northern Region',
     phone:   schoolConfig.phone   || '+233 20 000 0000',
     email:   schoolConfig.email   || '',
+    logo:    schoolConfig.logo    || null,
+  }
+
+  // Charger le logo en base64 si une URL est fournie
+  let logoData = null
+  if (school.logo) {
+    try {
+      const response = await fetch(school.logo)
+      const blob = await response.blob()
+      const reader = new FileReader()
+      logoData = await new Promise((resolve) => {
+        reader.onloadend = () => resolve(reader.result)
+        reader.readAsDataURL(blob)
+      })
+    } catch (e) {
+      console.warn('Logo could not be loaded for fee report.')
+    }
   }
 
   // 1. Charger classes, élèves
-  const { classes, students, studentIds, levelNames } =
+  const { classes, students, studentIds, levelNames, studentLevelMap } =
     await loadAllClassesAndStudents({ classIds, levelIds, academicYear })
 
   if (!classes.length || !students.length) {
@@ -175,7 +198,7 @@ export async function generateFeesReport({
   }
 
   // 2. Charger attendus et paiements en masse
-  const { expectedMap } = await loadExpectedData(levelNames, academicYear, dateTo, studentIds)
+  const { expectedMap } = await loadExpectedData(levelNames, academicYear, dateTo, studentIds, studentLevelMap)
   const paidMap = await loadPaymentsData(studentIds, academicYear, dateFrom, dateTo)
 
   // 3. Construire les lignes sans aucun appel réseau
@@ -187,7 +210,7 @@ export async function generateFeesReport({
       const collected = paidMap.get(stu.id) || 0
       const outstanding = expected - collected
       const rate = expected > 0 ? Math.min(100, Math.round((collected / expected) * 1000) / 10) : 0
-      const status = outstanding <= 0 ? 'À jour' : 'En retard'
+      const status = outstanding <= 0 ? 'Up to date' : 'Overdue'
       allRows.push({
         type: 'student',
         className: cls?.name || '—',
@@ -225,7 +248,7 @@ export async function generateFeesReport({
         collected,
         outstanding,
         rate,
-        hasSchedule: expected > 0 || collected > 0    // simplification
+        hasSchedule: expected > 0 || collected > 0
       })
     }
   }
@@ -238,11 +261,21 @@ export async function generateFeesReport({
   const totalOutstanding = totalExpected - totalCollected
   const overallRate = totalExpected > 0 ? Math.min(100, Math.round((totalCollected / totalExpected) * 1000) / 10) : 0
 
-  // ═══════════════ DESSIN (identique à l'ancien) ═══════════════
+  // ═══════════════ DESSIN ═══════════════
   let y = 0
   fillRect(doc, 0, 0, A4_W, 28, BLUE)
-  txt(doc, school.name, M + 20, 10, { size: 12, style: 'bold', color: WHITE })
-  txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), M + 20, 17, { size: 7.5, color: [190, 215, 245] })
+
+  if (logoData) {
+    const logoSize = 18
+    doc.addImage(logoData, 'JPEG', M + 2, 5, logoSize, logoSize)
+    const textX = M + 2 + logoSize + 3
+    txt(doc, school.name, textX, 10, { size: 12, style: 'bold', color: WHITE })
+    txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), textX, 17, { size: 7.5, color: [190, 215, 245] })
+  } else {
+    txt(doc, school.name, M + 20, 10, { size: 12, style: 'bold', color: WHITE })
+    txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), M + 20, 17, { size: 7.5, color: [190, 215, 245] })
+  }
+
   txt(doc, 'FEES COLLECTION REPORT', A4_W - M, 25, { size: 10, style: 'bold', color: GOLD, align: 'right' })
   y = 32
   const periodLabel = `${dateFrom.toLocaleDateString('en-GB')} – ${dateTo.toLocaleDateString('en-GB')}`
@@ -268,7 +301,7 @@ export async function generateFeesReport({
   })
   y += 16
 
-  // Tableau (identique)
+  // Tableau
   if (tableType === 'student') {
     const colW = [14, 38, 24, 26, 26, 26, 26]
     const colX = [M, M+colW[0], M+colW[0]+colW[1], M+colW[0]+colW[1]+colW[2], M+colW[0]+colW[1]+colW[2]+colW[3], M+colW[0]+colW[1]+colW[2]+colW[3]+colW[4], M+colW[0]+colW[1]+colW[2]+colW[3]+colW[4]+colW[5]]
@@ -280,7 +313,7 @@ export async function generateFeesReport({
       const bg = idx % 2 === 0 ? WHITE : [250,250,252]
       fillRect(doc, M, y, CW, 6, bg)
       strokeRect(doc, M, y, CW, 6, MGRAY)
-      txt(doc, r.status,                    colX[0]+2, y+4, { size:7, color: r.status==='À jour' ? GREEN : RED })
+      txt(doc, r.status,                    colX[0]+2, y+4, { size:7, color: r.status==='Up to date' ? GREEN : RED })
       txt(doc, r.studentName,               colX[1]+2, y+4, { size:7, color: BLACK })
       txt(doc, r.className,                 colX[2]+2, y+4, { size:7, color: BLACK })
       txt(doc, r.expected > 0 ? fmtGHS(r.expected) : 'N/A', colX[3]+colW[3]-1, y+4, { size:7, color: r.expected>0 ? BLACK : DGRAY, align:'right' })
@@ -291,7 +324,6 @@ export async function generateFeesReport({
       txt(doc, r.expected > 0 ? `${r.rate.toFixed(1)}%` : 'N/A', colX[6]+colW[6]-1, y+4, { size:7, style:'bold', color: r.rate>=100 ? GREEN : (r.rate>=50 ? AMBER : RED), align:'right' })
       y += 6
     })
-    // TOTAL
     hline(doc, y, BLUE, 0.5)
     y += 2
     fillRect(doc, M, y, CW, 8, BLUE_LT)
@@ -324,7 +356,6 @@ export async function generateFeesReport({
       txt(doc, r.expected > 0 ? `${r.rate.toFixed(1)}%` : 'N/A', colX[5]+colW[5]-1, y+4, { size:7, style:'bold', color: r.rate>=100 ? GREEN : (r.rate>=50 ? AMBER : RED), align:'right' })
       y += 6
     })
-    // TOTAL
     hline(doc, y, BLUE, 0.5)
     y += 2
     fillRect(doc, M, y, CW, 8, BLUE_LT)

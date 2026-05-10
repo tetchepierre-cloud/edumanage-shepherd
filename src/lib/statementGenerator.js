@@ -151,6 +151,7 @@ export async function generateStudentStatement({
     address: schoolConfig.address || 'Tamale, Northern Region',
     phone:   schoolConfig.phone   || '+233 20 000 0000',
     email:   schoolConfig.email   || '',
+    logo:    schoolConfig.logo    || null,    // ← ajouté
   }
   const studentName = `${student.first_name || ''} ${student.last_name || ''}`.trim()
 
@@ -218,16 +219,40 @@ export async function generateStudentStatement({
   // ═════════════════════════════════════════════════════════════════════════
   // DESSIN DU PDF
   // ═════════════════════════════════════════════════════════════════════════
+    // Charger le logo si disponible
+  let logoData = null
+  if (school.logo) {
+    try {
+      const response = await fetch(school.logo)
+      const blob = await response.blob()
+      const reader = new FileReader()
+      logoData = await new Promise(resolve => {
+        reader.onloadend = () => resolve(reader.result)
+        reader.readAsDataURL(blob)
+      })
+    } catch (e) {
+      console.warn('Logo could not be loaded for statement.')
+    }
+  }
   let y = 0
 
-  // En-tête
+    // En-tête
   fillRect(doc, 0, 0, A4_W, 28, BLUE)
-  doc.setFillColor(...WHITE)
-  doc.circle(M + 8, 14, 7, 'F')
-  txt(doc, '🏫', M + 4.5, 16.5, { size: 10, color: BLUE })
-  txt(doc, school.name, M + 20, 10, { size: 12, style: 'bold', color: WHITE })
-  txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), M + 20, 17, { size: 7.5, color: [190, 215, 245] })
-  if (school.email) txt(doc, school.email, M + 20, 23, { size: 7, color: [190, 215, 245] })
+  if (logoData) {
+    const logoSize = 18
+    doc.addImage(logoData, 'JPEG', M + 2, 5, logoSize, logoSize)
+    const textX = M + 2 + logoSize + 3
+    txt(doc, school.name, textX, 10, { size: 12, style: 'bold', color: WHITE })
+    txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), textX, 17, { size: 7.5, color: [190, 215, 245] })
+    if (school.email) txt(doc, school.email, textX, 23, { size: 7, color: [190, 215, 245] })
+  } else {
+    doc.setFillColor(...WHITE)
+    doc.circle(M + 8, 14, 7, 'F')
+    txt(doc, '🏫', M + 4.5, 16.5, { size: 10, color: BLUE })
+    txt(doc, school.name, M + 20, 10, { size: 12, style: 'bold', color: WHITE })
+    txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), M + 20, 17, { size: 7.5, color: [190, 215, 245] })
+    if (school.email) txt(doc, school.email, M + 20, 23, { size: 7, color: [190, 215, 245] })
+  }
   txt(doc, 'STUDENT ACCOUNT STATEMENT', A4_W - M, 25, { size: 9, style: 'bold', color: GOLD, align: 'right' })
   y = 32
 
@@ -279,9 +304,9 @@ export async function generateStudentStatement({
   y += 20
 
   // Tableau des paiements
-  const colDate  = 24
-  const colDesc  = CW - colDate - 3 * 30
-  const colNum   = 30
+  const colDate = 24
+  const colNum  = 27
+  const colDesc = CW - colDate - 3 * colNum   // ← colNum est déjà connu
   const cols     = [colDate, colDesc, colNum, colNum, colNum]
   const colX     = [
     M,

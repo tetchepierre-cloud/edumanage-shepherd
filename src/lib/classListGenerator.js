@@ -1,7 +1,7 @@
 // src/lib/classListGenerator.js
 import { jsPDF } from 'jspdf';
 
-export function generateClassListPDF({ className, students, school }) {
+export async function generateClassListPDF({ className, students, school }) {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -12,19 +12,53 @@ export function generateClassListPDF({ className, students, school }) {
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 15;
   let y = margin;
+  
+  // Charger le logo si disponible
+  let logoData = null;
+  if (school.logo) {
+    try {
+      const response = await fetch(school.logo);
+      const blob = await response.blob();
+      const reader = new FileReader();
+      logoData = await new Promise((resolve) => {
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    } catch (e) {
+      console.warn('Logo could not be loaded for class list.');
+    }
+  }
 
-  // --- École ---
-  doc.setFontSize(16);
-  doc.setFont('helvetica', 'bold');
-  doc.text(school.name || 'School Name', pageW / 2, y, { align: 'center' });
-  y += 7;
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text(school.address || 'Address', pageW / 2, y, { align: 'center' });
-  y += 5;
-  if (school.phone) {
-    doc.text(`Tel: ${school.phone}`, pageW / 2, y, { align: 'center' });
+    // --- En-tête école (avec logo si disponible) ---
+  if (logoData) {
+    const logoSize = 18;
+    doc.addImage(logoData, 'JPEG', margin, y - 2, logoSize, logoSize);
+    const textX = margin + logoSize + 4;
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text(school.name || 'School Name', textX, y + 4, { align: 'left' });
+    y += 7;
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(school.address || 'Address', textX, y + 4, { align: 'left' });
     y += 5;
+    if (school.phone) {
+      doc.text(`Tel: ${school.phone}`, textX, y + 4, { align: 'left' });
+      y += 5;
+    }
+  } else {
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text(school.name || 'School Name', pageW / 2, y, { align: 'center' });
+    y += 7;
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(school.address || 'Address', pageW / 2, y, { align: 'center' });
+    y += 5;
+    if (school.phone) {
+      doc.text(`Tel: ${school.phone}`, pageW / 2, y, { align: 'center' });
+      y += 5;
+    }
   }
   y += 4;
 

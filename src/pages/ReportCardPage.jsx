@@ -25,8 +25,8 @@ export default function ReportCardPage() {
   const [loading, setLoading] = useState(false);
   const [school, setSchool] = useState({ name: '', address: '', phone: '' });
 
-  // Nouvel état pour la prévisualisation KG
-  const [kgPreview, setKgPreview] = useState(null); // { student, assessments, attendance }
+  // Prévisualisation KG
+  const [kgPreview, setKgPreview] = useState(null);
 
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
@@ -55,28 +55,24 @@ export default function ReportCardPage() {
     return cls?.level === 'KG';
   };
 
-  // Charge les données KG pour prévisualisation
   const loadKgPreview = async (studentId, termId) => {
-    // Infos de l'élève
     const { data: student } = await supabase
       .from('students')
       .select('first_name, last_name, date_of_birth')
       .eq('id', studentId)
-      .single();
+      .maybeSingle();
 
-    // Évaluations KG du terme
     const { data: assessments } = await supabase
       .from('kg_assessments')
       .select('domain, rubric')
       .eq('student_id', studentId)
       .eq('term_id', termId);
 
-    // Présence sur le terme
     const { data: termData } = await supabase
       .from('academic_terms')
       .select('start_date, end_date')
       .eq('id', termId)
-      .single();
+      .maybeSingle();
 
     let attendance = { present: 0, absent: 0, late: 0, excused: 0, total: 0 };
     if (termData) {
@@ -131,7 +127,7 @@ export default function ReportCardPage() {
         .from('students')
         .select('first_name, last_name, date_of_birth')
         .eq('id', selectedStudent)
-        .single();
+        .maybeSingle();
 
       const rep = await computeTermReport(selectedStudent, selectedTerm);
 
@@ -151,8 +147,8 @@ export default function ReportCardPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Report Cards</h1>
-      <p className="text-gray-500 text-sm -mt-4">Compute term averages and generate terminal reports</p>
+      <h1 className="text-2xl font-bold text-gray-900">Terminal Reports</h1>     {/* ← modifié */}
+      <p className="text-gray-500 text-sm -mt-4">Compute term averages and generate terminal reports</p>  {/* ← modifié */}
 
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
         <div>
@@ -178,7 +174,7 @@ export default function ReportCardPage() {
         </div>
         <button onClick={handleCompute} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Compute</button>
         <button onClick={handlePrint} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
-          <Printer size={16} /> Print Report Card
+          <Printer size={16} /> Print Terminal Report
         </button>
       </div>
 
@@ -195,7 +191,6 @@ export default function ReportCardPage() {
               Class: {classes.find(c => c.id === selectedClass)?.name || ''} · Term: {terms.find(t => t.id === selectedTerm)?.name || ''}
             </p>
           </div>
-
           <div className="p-4">
             <h3 className="font-medium text-gray-700 mb-2">Learning Domains</h3>
             <table className="w-full text-sm">
@@ -221,37 +216,14 @@ export default function ReportCardPage() {
                 )}
               </tbody>
             </table>
-
             <h3 className="font-medium text-gray-700 mt-6 mb-2">Attendance</h3>
             <div className="grid grid-cols-3 md:grid-cols-6 gap-3 text-sm">
-              <div className="bg-gray-50 rounded p-2 text-center">
-                <span className="block text-xs text-gray-500">Present</span>
-                <span className="font-bold">{kgPreview.attendance.present}</span>
-              </div>
-              <div className="bg-gray-50 rounded p-2 text-center">
-                <span className="block text-xs text-gray-500">Absent</span>
-                <span className="font-bold">{kgPreview.attendance.absent}</span>
-              </div>
-              <div className="bg-gray-50 rounded p-2 text-center">
-                <span className="block text-xs text-gray-500">Late</span>
-                <span className="font-bold">{kgPreview.attendance.late}</span>
-              </div>
-              <div className="bg-gray-50 rounded p-2 text-center">
-                <span className="block text-xs text-gray-500">Excused</span>
-                <span className="font-bold">{kgPreview.attendance.excused}</span>
-              </div>
-              <div className="bg-gray-50 rounded p-2 text-center">
-                <span className="block text-xs text-gray-500">Total</span>
-                <span className="font-bold">{kgPreview.attendance.total}</span>
-              </div>
-              <div className="bg-gray-50 rounded p-2 text-center">
-                <span className="block text-xs text-gray-500">Rate</span>
-                <span className="font-bold">
-                  {kgPreview.attendance.total > 0
-                    ? ((kgPreview.attendance.present / kgPreview.attendance.total) * 100).toFixed(1) + '%'
-                    : 'N/A'}
-                </span>
-              </div>
+              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Present</span><span className="font-bold">{kgPreview.attendance.present}</span></div>
+              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Absent</span><span className="font-bold">{kgPreview.attendance.absent}</span></div>
+              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Late</span><span className="font-bold">{kgPreview.attendance.late}</span></div>
+              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Excused</span><span className="font-bold">{kgPreview.attendance.excused}</span></div>
+              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Total</span><span className="font-bold">{kgPreview.attendance.total}</span></div>
+              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Rate</span><span className="font-bold">{kgPreview.attendance.total > 0 ? ((kgPreview.attendance.present / kgPreview.attendance.total) * 100).toFixed(1) + '%' : 'N/A'}</span></div>
             </div>
           </div>
         </div>

@@ -1,3 +1,4 @@
+// src/pages/DashboardPage.jsx
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 
@@ -26,44 +27,43 @@ export default function DashboardPage() {
     setLoading(true)
     try {
       const now = new Date()
-      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
-      const lastDay  = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString()
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
+      const lastDay  = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0]
       const currentMonth = now.getMonth() + 1
       const currentYear  = now.getFullYear()
 
-      // ✅ 1. Active Students
+      // Active Students
       const { count: studentsCount, error: sError } = await supabase
         .from('students')
         .select('*', { count: 'exact', head: true })
         .eq('active', true)
-
       if (sError) console.error('students error:', sError)
 
-      // ✅ 2. Fees du mois
+      // Fees du mois (par date de paiement ou à défaut par date de création)
       const { data: feesData, error: feesError } = await supabase
         .from('fee_payments')
-        .select('amount')
-        .gte('created_at', firstDay)
-        .lte('created_at', lastDay)
+        .select('amount, payment_date, created_at')
+        .in('status', ['paid', 'partial'])
 
       if (feesError) console.error('fees error:', feesError)
-      const totalFees = feesData?.reduce(
-        (sum, f) => sum + (parseFloat(f.amount) || 0), 0
-      ) || 0
+      const totalFees = (feesData || []).filter(p => {
+        const effectiveDate = p.payment_date ? p.payment_date : p.created_at
+        return effectiveDate >= firstDay && effectiveDate <= lastDay
+      }).reduce((sum, f) => sum + (parseFloat(f.amount) || 0), 0)
 
-      // ✅ 3. Expenses du mois
+      // Expenses du mois (par date de la dépense ou à défaut par date de création)
       const { data: expensesData, error: expError } = await supabase
         .from('expenses')
-        .select('amount')
+        .select('amount, created_at')
         .gte('created_at', firstDay)
         .lte('created_at', lastDay)
 
       if (expError) console.error('expenses error:', expError)
-      const totalExpenses = expensesData?.reduce(
+      const totalExpenses = (expensesData || []).reduce(
         (sum, e) => sum + (parseFloat(e.amount) || 0), 0
-      ) || 0
+      )
 
-      // ✅ 4. Payroll du mois
+      // Payroll du mois (par mois/année)
       const { data: payrollData, error: payError } = await supabase
         .from('payroll')
         .select('net_salary')
@@ -71,66 +71,47 @@ export default function DashboardPage() {
         .eq('year', currentYear)
 
       if (payError) console.error('payroll error:', payError)
-      const totalPayroll = payrollData?.reduce(
+      const totalPayroll = (payrollData || []).reduce(
         (sum, p) => sum + (parseFloat(p.net_salary) || 0), 0
-      ) || 0
+      )
 
-      // ✅ 5. Low Stock — articles actifs sous leur seuil minimum
+      // Low Stock / Out of Stock
       const { data: stockData, error: stockError } = await supabase
-        .from('stock_items_with_quantity')
+        .from('stock_items')
         .select('quantity, minimum_stock')
         .eq('is_active', true)
 
       if (stockError) console.error('stock error:', stockError)
+      const lowStockCount = (stockData || []).filter(i => i.quantity > 0 && i.quantity <= i.minimum_stock).length
+      const outOfStockCount = (stockData || []).filter(i => i.quantity <= 0).length
 
-      const lowStockCount = (stockData || []).filter(
-        i => i.quantity > 0 && i.quantity <= i.minimum_stock
-      ).length
-
-      const outOfStockCount = (stockData || []).filter(
-        i => i.quantity <= 0
-      ).length
-
-      // ✅ 6. Recent Payments
+      // Recent Payments (5 derniers par date de paiement)
       const { data: recentFeesRaw, error: rfError } = await supabase
         .from('fee_payments')
-        .select(`
-          id,
-          amount,
-          payment_type,
-          payment_method,
-          status,
-          term,
-          academic_year,
-          created_at,
-          student_id,
-          students (
-            first_name,
-            last_name
-          )
-        `)
+        .select(`id, amount, payment_type, payment_method, status, term, academic_year, payment_date, created_at, student_id, students (first_name, last_name)`)
+        .order('payment_date', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(5)
 
       if (rfError) console.error('recent payments error:', rfError)
-
       const enrichedPayments = (recentFeesRaw || []).map((payment) => ({
         ...payment,
         studentName: payment.students
           ? `${payment.students.first_name} ${payment.students.last_name}`
           : 'Unknown Student',
       }))
+      setRecentPayments(enrichedPayments)
 
-      // ✅ 7. Recent Expenses
+      // Recent Expenses (5 dernières par date de création)
       const { data: recentExpensesData, error: reError } = await supabase
         .from('expenses')
         .select('id, description, amount, category, created_at')
         .order('created_at', { ascending: false })
         .limit(5)
-
       if (reError) console.error('recent expenses error:', reError)
+      setRecentExpenses(recentExpensesData || [])
 
-      // ✅ Set all stats
+      // Set all stats
       setStats({
         totalStudents: studentsCount || 0,
         totalFees,
@@ -139,8 +120,6 @@ export default function DashboardPage() {
         lowStockItems: lowStockCount,
         outOfStockItems: outOfStockCount,
       })
-      setRecentPayments(enrichedPayments)
-      setRecentExpenses(recentExpensesData || [])
 
     } catch (error) {
       console.error('Dashboard fatal error:', error)
@@ -280,7 +259,7 @@ export default function DashboardPage() {
                         {payment.payment_type || 'Payment'}
                         {payment.term && ` • ${payment.term}`}
                         {' • '}
-                        {new Date(payment.created_at)
+                        {new Date(payment.payment_date || payment.created_at)
                           .toLocaleDateString('en-GH')}
                       </p>
                     </div>
