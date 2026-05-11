@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import FeeManagementPage from './FeeManagementPage'
 import AcademicSettingsTab from '../components/AcademicSettingsTab';
 import PermissionsTab from '../components/PermissionsTab';
+import { CanSee } from '../components/PermissionGate';  // ← ajouté
 
 export default function SettingsPage() {
   const [profile, setProfile]     = useState(null)
@@ -21,7 +22,6 @@ export default function SettingsPage() {
     phone: '', email: '', base_salary: ''
   })
 
-  // ── État pour l'onglet École ──────────────────────────────────────────
   const [schoolSettings, setSchoolSettings] = useState({
     school_name: '',
     address: '',
@@ -111,38 +111,27 @@ export default function SettingsPage() {
     }
   }
 
-  // ── Création d'une classe avec nommage automatique ──
   const handleAddClass = async (e) => {
     e.preventDefault()
-
     const selectedLevel = levels.find(l => l.id === newClass.level)
     if (!selectedLevel) {
       toast.error('Please select a grade.')
       return
     }
-
-    // Compter les classes existantes pour ce niveau
     const { count, error: countError } = await supabase
       .from('classes')
       .select('*', { count: 'exact', head: true })
       .eq('level_id', newClass.level)
-
     if (countError) {
       toast.error('Error: ' + countError.message)
       return
     }
-
     const existingCount = count || 0
     let className = ''
-
     if (existingCount === 0) {
-      // Première classe : juste le nom du niveau (ex: "JHS 1")
       className = selectedLevel.name
     } else {
-      // Classes suivantes : le nom du niveau + suffixe A, B, C…
-      // On renomme aussi la PREMIÈRE classe s'il s'agit de la seconde
       if (existingCount === 1) {
-        // Récupérer la première classe de ce niveau
         const { data: firstClass, error: firstError } = await supabase
           .from('classes')
           .select('id, name')
@@ -150,28 +139,22 @@ export default function SettingsPage() {
           .order('name')
           .limit(1)
           .single()
-
         if (!firstError && firstClass && firstClass.name === selectedLevel.name) {
-          // Renommer la première classe en "Niveau A"
           await supabase
             .from('classes')
             .update({ name: `${selectedLevel.name} A` })
             .eq('id', firstClass.id)
         }
       }
-      // Nouvelle classe = Niveau + lettre suivante
-      const suffix = String.fromCharCode(65 + existingCount) // 0→A, 1→B, etc.
+      const suffix = String.fromCharCode(65 + existingCount)
       className = `${selectedLevel.name} ${suffix}`
     }
-
     const { error } = await supabase.from('classes').insert([{
       name: className,
       level_id: newClass.level,
       capacity: newClass.capacity,
     }])
-
     if (error) { toast.error('Error: ' + error.message); return }
-
     toast.success(`Class "${className}" created!`)
     setNewClass({ level: '', capacity: 30 })
     fetchData()
@@ -215,23 +198,57 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs avec permissions */}
       <div className="flex gap-2 mb-6 flex-wrap">
-        {[
-          { id: 'school',       label: '🏫 School' },
-          { id: 'classes',      label: '🏫 Classes' },
-          { id: 'staff',        label: '👥 Staff' },
-          { id: 'feestructure', label: '💲 Fee Structure' },
-          { id: 'schedules',    label: '📅 Fee Schedules' },
-          { id: 'academic',     label: '🎓 Academic' },
-          { id: 'permissions',  label: '🔐 Permissions' },
-        ].map(tab => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+        <CanSee module="settings" section="tabs" element="School tab">
+          <button onClick={() => setActiveTab('school')}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
-              ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
-            {tab.label}
+              ${activeTab === 'school' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            🏫 School
           </button>
-        ))}
+        </CanSee>
+        <CanSee module="settings" section="tabs" element="Classes tab">
+          <button onClick={() => setActiveTab('classes')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
+              ${activeTab === 'classes' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            🏫 Classes
+          </button>
+        </CanSee>
+        <CanSee module="settings" section="tabs" element="Staff tab">
+          <button onClick={() => setActiveTab('staff')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
+              ${activeTab === 'staff' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            👥 Staff
+          </button>
+        </CanSee>
+        <CanSee module="settings" section="tabs" element="Fee Structure tab">
+          <button onClick={() => setActiveTab('feestructure')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
+              ${activeTab === 'feestructure' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            💲 Fee Structure
+          </button>
+        </CanSee>
+        <CanSee module="settings" section="tabs" element="Fee Schedules tab">
+          <button onClick={() => setActiveTab('schedules')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
+              ${activeTab === 'schedules' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            📅 Fee Schedules
+          </button>
+        </CanSee>
+        <CanSee module="settings" section="tabs" element="Academic tab">
+          <button onClick={() => setActiveTab('academic')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
+              ${activeTab === 'academic' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            🎓 Academic
+          </button>
+        </CanSee>
+        <CanSee module="settings" section="tabs" element="Permissions tab">
+          <button onClick={() => setActiveTab('permissions')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
+              ${activeTab === 'permissions' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            🔐 Permissions
+          </button>
+        </CanSee>
       </div>
 
       {/* ── Tab: School ── */}
@@ -277,7 +294,6 @@ export default function SettingsPage() {
       {/* ── Tab: Classes ── */}
       {activeTab === 'classes' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Ajout de classe */}
           <div className="bg-white rounded-xl shadow p-6">
             <h2 className="text-lg font-semibold mb-4">Add New Class</h2>
             <p className="text-xs text-gray-400 mb-4">
@@ -305,7 +321,6 @@ export default function SettingsPage() {
             </form>
           </div>
 
-          {/* Classes existantes */}
           <div className="bg-white rounded-xl shadow p-6">
             <h2 className="text-lg font-semibold mb-4">Existing Classes ({classes.length})</h2>
             {classes.length === 0 ? (
@@ -327,7 +342,6 @@ export default function SettingsPage() {
             )}
           </div>
 
-          {/* ─── Minimum d'admission par niveau ─── */}
           <div className="lg:col-span-2 bg-white rounded-xl shadow p-6">
             <h2 className="text-lg font-semibold mb-4">🔒 Minimum Admission Payment (per Level)</h2>
             <p className="text-sm text-gray-500 mb-4">
@@ -444,7 +458,7 @@ export default function SettingsPage() {
 }
 
 // ══════════════════════════════════════════════════════════
-// FEE SCHEDULES TAB (complet, fonctionnel)
+// FEE SCHEDULES TAB (complet, inchangé sauf qu'on n'ajoute pas de permissions ici)
 // ══════════════════════════════════════════════════════════
 function FeeSchedulesTab() {
   const [levels, setLevels]           = useState([])
@@ -477,9 +491,7 @@ function FeeSchedulesTab() {
       .eq('academic_year', selectedYear)
       .eq('is_active', true)
       .order('fee_name')
-
     setFeeStructures(fees || [])
-
     if (fees?.length) {
       const ids = fees.map(f => f.id)
       const { data: scheds } = await supabase
@@ -487,14 +499,12 @@ function FeeSchedulesTab() {
         .select('*')
         .in('fee_structure_id', ids)
         .order('sort_order')
-
       const grouped = {}
       ids.forEach(id => { grouped[id] = [] })
       ;(scheds || []).forEach(s => {
         if (grouped[s.fee_structure_id]) grouped[s.fee_structure_id].push(s)
       })
       setSchedules(grouped)
-
       const initTranches = {}
       ids.forEach(id => { initTranches[id] = { label: '', due_date: '', amount: '' } })
       setNewTranche(initTranches)
@@ -510,14 +520,12 @@ function FeeSchedulesTab() {
       toast.error('Please fill all fields — label, date and amount')
       return
     }
-
     const existingTotal = (schedules[feeStructureId] || []).reduce((s, tr) => s + parseFloat(tr.amount || 0), 0)
     const newAmount     = parseFloat(t.amount)
     if (existingTotal + newAmount > annualAmount) {
       toast.error(`Total tranches (GHS ${(existingTotal + newAmount).toFixed(2)}) exceeds annual amount (GHS ${annualAmount.toFixed(2)})`)
       return
     }
-
     setSaving(true)
     const sortOrder = (schedules[feeStructureId] || []).length + 1
     const { error } = await supabase.from('fee_schedules').insert({
@@ -527,9 +535,7 @@ function FeeSchedulesTab() {
       amount:     newAmount,
       sort_order: sortOrder,
     })
-
     if (error) { toast.error('Error: ' + error.message); setSaving(false); return }
-
     toast.success('Tranche added!')
     setNewTranche(prev => ({ ...prev, [feeStructureId]: { label: '', due_date: '', amount: '' } }))
     fetchFeeStructures()

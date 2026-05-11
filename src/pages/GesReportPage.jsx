@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { generateGesReport } from '../lib/gesReportGenerator';
 import { FileText } from 'lucide-react';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 const ACADEMIC_YEARS = ['2024/2025', '2025/2026', '2026/2027'];
 
@@ -37,12 +38,14 @@ export default function GesReportPage() {
       </p>
 
       <div className="bg-white rounded-xl shadow p-6 space-y-4">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Academic Year</label>
-          <select value={academicYear} onChange={e => setAcademicYear(e.target.value)} className="border rounded-lg px-3 py-2 text-sm w-40">
-            {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
+        <CanSee module="ges-report" section="selector" element="Academic Year select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Academic Year</label>
+            <select value={academicYear} onChange={e => setAcademicYear(e.target.value)} className="border rounded-lg px-3 py-2 text-sm w-40">
+              {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+        </CanSee>
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
           <strong>What this report includes:</strong>
@@ -54,14 +57,16 @@ export default function GesReportPage() {
           </ul>
         </div>
 
-        <button
-          onClick={handleGenerate}
-          disabled={generating}
-          className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          <FileText size={18} />
-          {generating ? 'Generating...' : 'Generate GES Report (PDF)'}
-        </button>
+        <CanAct module="ges-report" section="header" element="Generate GES Report">
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50"
+          >
+            <FileText size={18} />
+            {generating ? 'Generating...' : 'Generate GES Report (PDF)'}
+          </button>
+        </CanAct>
       </div>
     </div>
   );

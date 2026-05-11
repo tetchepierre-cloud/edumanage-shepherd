@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 import { generateAttendanceRegisterPDF } from '../lib/attendanceReportGenerator';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 const STATUSES = [
   { code: 'P', label: 'Present',  color: 'bg-green-100 text-green-700 border-green-300' },
@@ -21,14 +22,11 @@ export default function AttendancePage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
-  // Statistiques du mois
   const [stats, setStats] = useState({ total: 0, present: 0, absent: 0, late: 0, excused: 0 });
 
-  // Justificatifs
   const [showJustifications, setShowJustifications] = useState(false);
   const [justificationsList, setJustificationsList] = useState([]);
 
-  // Infos école
   const [school, setSchool] = useState({ name: '', address: '', phone: '' });
 
   useEffect(() => {
@@ -190,7 +188,6 @@ export default function AttendancePage() {
 
   const selectedClassObj = classes.find(c => c.id === selectedClass);
 
-  // --- Cahier d'appel mensuel ---
   const printMonthlyRegister = async () => {
     if (!selectedClassObj || students.length === 0) return;
     const year = new Date(selectedDate).getFullYear();
@@ -232,19 +229,29 @@ export default function AttendancePage() {
 
       {/* Filters */}
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
-          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
-          <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="border rounded-lg px-3 py-2 text-sm" />
-        </div>
-        <button onClick={markAllPresent} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Mark All Present</button>
-        <button onClick={fetchJustifications} className="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700">Justifications</button>
-        <button onClick={printMonthlyRegister} className="bg-orange-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-orange-700">Print Monthly Register</button>
+        <CanSee module="attendance" section="header" element="Class select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
+            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="attendance" section="header" element="Date select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
+            <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="border rounded-lg px-3 py-2 text-sm" />
+          </div>
+        </CanSee>
+        <CanAct module="attendance" section="header" element="Mark All Present button">
+          <button onClick={markAllPresent} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Mark All Present</button>
+        </CanAct>
+        <CanAct module="attendance" section="header" element="Justifications button">
+          <button onClick={fetchJustifications} className="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700">Justifications</button>
+        </CanAct>
+        <CanAct module="attendance" section="header" element="Print Monthly Register">
+          <button onClick={printMonthlyRegister} className="bg-orange-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-orange-700">Print Monthly Register</button>
+        </CanAct>
       </div>
 
       {message && (
@@ -294,14 +301,16 @@ export default function AttendancePage() {
                       <td className="px-4 py-2 text-gray-500">{idx + 1}</td>
                       <td className="px-4 py-2 font-medium">{s.last_name} {s.first_name}</td>
                       <td className="px-4 py-2">
-                        <div className="flex justify-center gap-1">
-                          {STATUSES.map(st => (
-                            <button key={st.code} onClick={() => handleStatusChange(s.id, st.code)}
-                              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${currentStatus === st.code ? st.color + ' shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}>
-                              {st.label}
-                            </button>
-                          ))}
-                        </div>
+                        <CanAct module="attendance" section="grid" element="Status buttons">
+                          <div className="flex justify-center gap-1">
+                            {STATUSES.map(st => (
+                              <button key={st.code} onClick={() => handleStatusChange(s.id, st.code)}
+                                className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${currentStatus === st.code ? st.color + ' shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}>
+                                {st.label}
+                              </button>
+                            ))}
+                          </div>
+                        </CanAct>
                       </td>
                     </tr>
                   );
@@ -333,21 +342,23 @@ export default function AttendancePage() {
                       <p className="text-xs text-gray-500">{j.reason}</p>
                       {j.document_url && <a href={j.document_url} target="_blank" className="text-blue-500 text-xs underline">View document</a>}
                     </div>
-                    <button
-                      onClick={async () => {
-                        await supabase.from('absence_justifications').update({
-                          validated_at: new Date().toISOString(),
-                          validated_by: (await supabase.auth.getUser()).data.user?.id || null
-                        }).eq('id', j.id);
-                        if (j.attendance_id) {
-                          await supabase.from('attendance').update({ status: 'E' }).eq('id', j.attendance_id);
-                        }
-                        setJustificationsList(prev => prev.filter(x => x.id !== j.id));
-                      }}
-                      className="text-green-600 hover:text-green-800 text-sm font-medium"
-                    >
-                      <CheckCircle size={16} /> Validate
-                    </button>
+                    <CanAct module="attendance" section="justifications_modal" element="Validate button">
+                      <button
+                        onClick={async () => {
+                          await supabase.from('absence_justifications').update({
+                            validated_at: new Date().toISOString(),
+                            validated_by: (await supabase.auth.getUser()).data.user?.id || null
+                          }).eq('id', j.id);
+                          if (j.attendance_id) {
+                            await supabase.from('attendance').update({ status: 'E' }).eq('id', j.attendance_id);
+                          }
+                          setJustificationsList(prev => prev.filter(x => x.id !== j.id));
+                        }}
+                        className="text-green-600 hover:text-green-800 text-sm font-medium"
+                      >
+                        <CheckCircle size={16} /> Validate
+                      </button>
+                    </CanAct>
                   </li>
                 ))}
               </ul>

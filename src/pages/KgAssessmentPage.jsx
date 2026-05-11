@@ -1,6 +1,7 @@
 // src/pages/KgAssessmentPage.jsx
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 const RUBRICS = ['E', 'D', 'A', 'Ex'];
 const RUBRIC_LABELS = { 'E': 'Emerging', 'D': 'Developing', 'A': 'Achieving', 'Ex': 'Extending' };
@@ -16,9 +17,9 @@ export default function KgAssessmentPage() {
   const [classes, setClasses] = useState([]);
   const [selectedTerm, setSelectedTerm] = useState('');
   const [selectedClass, setSelectedClass] = useState('');
-  const [classSubjects, setClassSubjects] = useState([]); // domaines KG
+  const [classSubjects, setClassSubjects] = useState([]);
   const [students, setStudents] = useState([]);
-  const [assessments, setAssessments] = useState({}); // { [studentId]: { [domain]: rubric } }
+  const [assessments, setAssessments] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -36,7 +37,6 @@ export default function KgAssessmentPage() {
     const year = term?.academic_year || '';
     if (!year) return;
 
-    // Récupérer les domaines KG assignés à cette classe
     supabase
       .from('class_subjects')
       .select('id, subject_id, subjects(name)')
@@ -46,7 +46,6 @@ export default function KgAssessmentPage() {
       .order('subject_id')
       .then(({ data }) => setClassSubjects(data || []));
 
-    // Élèves actifs
     supabase
       .from('students')
       .select('id, first_name, last_name')
@@ -59,7 +58,6 @@ export default function KgAssessmentPage() {
   useEffect(() => {
     if (!selectedTerm || !selectedClass || students.length === 0 || classSubjects.length === 0) return;
 
-    // Récupérer les évaluations existantes pour ce terme
     const studentIds = students.map(s => s.id);
     supabase
       .from('kg_assessments')
@@ -127,20 +125,24 @@ export default function KgAssessmentPage() {
       </div>
 
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Term</label>
-          <select value={selectedTerm} onChange={e => setSelectedTerm(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[150px]">
-            <option value="">-- Select Term --</option>
-            {terms.map(t => <option key={t.id} value={t.id}>{t.name} ({t.academic_year})</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
-          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
-            <option value="">-- Select Class --</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
+        <CanSee module="kg-assessments" section="header" element="Term select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Term</label>
+            <select value={selectedTerm} onChange={e => setSelectedTerm(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[150px]">
+              <option value="">-- Select Term --</option>
+              {terms.map(t => <option key={t.id} value={t.id}>{t.name} ({t.academic_year})</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="kg-assessments" section="header" element="Class select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
+            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
+              <option value="">-- Select Class --</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </CanSee>
       </div>
 
       {message && (
@@ -169,14 +171,16 @@ export default function KgAssessmentPage() {
                       const rubric = assessments[s.id]?.[cs.subjects?.name] || '';
                       return (
                         <td key={cs.id} className="px-3 py-2 text-center">
-                          <select
-                            value={rubric}
-                            onChange={e => handleRubricChange(s.id, cs.subjects?.name, e.target.value)}
-                            className={`px-2 py-1 rounded text-xs font-medium border ${rubric ? RUBRIC_COLORS[rubric] : 'border-gray-300'}`}
-                          >
-                            <option value="">—</option>
-                            {RUBRICS.map(r => <option key={r} value={r}>{RUBRIC_LABELS[r]}</option>)}
-                          </select>
+                          <CanAct module="kg-assessments" section="grid" element="Rubrics (E/D/A/Ex)">
+                            <select
+                              value={rubric}
+                              onChange={e => handleRubricChange(s.id, cs.subjects?.name, e.target.value)}
+                              className={`px-2 py-1 rounded text-xs font-medium border ${rubric ? RUBRIC_COLORS[rubric] : 'border-gray-300'}`}
+                            >
+                              <option value="">—</option>
+                              {RUBRICS.map(r => <option key={r} value={r}>{RUBRIC_LABELS[r]}</option>)}
+                            </select>
+                          </CanAct>
                         </td>
                       );
                     })}
@@ -186,9 +190,11 @@ export default function KgAssessmentPage() {
             </table>
           </div>
           <div className="p-4 border-t flex justify-end">
-            <button onClick={handleSave} disabled={saving} className="bg-green-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50">
-              {saving ? 'Saving...' : 'Save Assessments'}
-            </button>
+            <CanAct module="kg-assessments" section="footer" element="Save Assessments">
+              <button onClick={handleSave} disabled={saving} className="bg-green-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50">
+                {saving ? 'Saving...' : 'Save Assessments'}
+              </button>
+            </CanAct>
           </div>
         </div>
       ) : (

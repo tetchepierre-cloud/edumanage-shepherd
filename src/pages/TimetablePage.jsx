@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { generateTimetablePDF } from '../lib/timetableGenerator';
 import { Plus, Trash2, AlertTriangle, Printer, Users, Calendar } from 'lucide-react';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 const DAYS_OF_WEEK = [
   { idx: 1, label: 'Monday', short: 'Mon' },
@@ -186,41 +187,47 @@ export default function TimetablePage() {
           <p className="text-gray-500 text-sm mt-1">Manage class and teacher schedules</p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => setViewMode('class')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium ${viewMode === 'class' ? 'bg-blue-600 text-white' : 'bg-white border'}`}
-          ><Calendar size={16} className="inline mr-1" /> Classes</button>
-          <button
-            onClick={() => setViewMode('teacher')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium ${viewMode === 'teacher' ? 'bg-blue-600 text-white' : 'bg-white border'}`}
-          ><Users size={16} className="inline mr-1" /> Teachers</button>
+          <CanAct module="timetable" section="header" element="Classes/Teachers toggle">
+            <button
+              onClick={() => setViewMode('class')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${viewMode === 'class' ? 'bg-blue-600 text-white' : 'bg-white border'}`}
+            ><Calendar size={16} className="inline mr-1" /> Classes</button>
+            <button
+              onClick={() => setViewMode('teacher')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${viewMode === 'teacher' ? 'bg-blue-600 text-white' : 'bg-white border'}`}
+            ><Users size={16} className="inline mr-1" /> Teachers</button>
+          </CanAct>
         </div>
       </div>
 
       {viewMode === 'class' && (
         <>
           <div className="bg-white rounded-xl shadow p-4 flex gap-4 items-end">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Select Class</label>
-              <select
-                value={selectedClass}
-                onChange={e => setSelectedClass(e.target.value)}
-                className="border rounded-lg px-3 py-2 text-sm min-w-[200px]"
+            <CanSee module="timetable" section="selector" element="Class select">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Select Class</label>
+                <select
+                  value={selectedClass}
+                  onChange={e => setSelectedClass(e.target.value)}
+                  className="border rounded-lg px-3 py-2 text-sm min-w-[200px]"
+                >
+                  {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+            </CanSee>
+            <CanAct module="timetable" section="header" element="Print PDF button">
+              <button
+                onClick={() => generateTimetablePDF({
+                  className: selectedClassObj?.name || 'Class',
+                  slots,
+                  school,
+                  periods: DEFAULT_PERIODS,
+                })}
+                className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg text-sm"
               >
-                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-            <button
-              onClick={() => generateTimetablePDF({
-                className: selectedClassObj?.name || 'Class',
-                slots,
-                school,
-                periods: DEFAULT_PERIODS,
-              })}
-              className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg text-sm"
-            >
-              <Printer size={16} /> Print PDF
-            </button>
+                <Printer size={16} /> Print PDF
+              </button>
+            </CanAct>
           </div>
 
           {/* Volume horaire warnings */}
@@ -265,21 +272,22 @@ export default function TimetablePage() {
                           : '';
                         const hasConflict = slot && isTeacherBusy(slot.class_subjects?.teacher_id, day.idx, period.number);
                         return (
-                          <td
-                            key={day.idx}
-                            className={`border p-2 text-center cursor-pointer transition-colors ${hasConflict ? 'bg-red-100 hover:bg-red-200' : 'hover:bg-blue-50'}`}
-                            onClick={() => slot ? openEditSlot(slot) : openAddSlot(day.idx, period.number)}
-                          >
-                            {slot ? (
-                              <>
-                                <div className="font-medium text-xs">{subjectName}</div>
-                                {teacherName && <div className="text-xs text-gray-500">{teacherName}</div>}
-                                {hasConflict && <AlertTriangle size={12} className="text-red-500 inline ml-1" />}
-                              </>
-                            ) : (
-                              <span className="text-gray-300 text-xl">+</span>
-                            )}
-                          </td>
+                          <CanAct module="timetable" section="grid" element="Click slot" key={day.idx}>
+                            <td
+                              className={`border p-2 text-center cursor-pointer transition-colors ${hasConflict ? 'bg-red-100 hover:bg-red-200' : 'hover:bg-blue-50'}`}
+                              onClick={() => slot ? openEditSlot(slot) : openAddSlot(day.idx, period.number)}
+                            >
+                              {slot ? (
+                                <>
+                                  <div className="font-medium text-xs">{subjectName}</div>
+                                  {teacherName && <div className="text-xs text-gray-500">{teacherName}</div>}
+                                  {hasConflict && <AlertTriangle size={12} className="text-red-500 inline ml-1" />}
+                                </>
+                              ) : (
+                                <span className="text-gray-300 text-xl">+</span>
+                              )}
+                            </td>
+                          </CanAct>
                         );
                       })}
                     </tr>
@@ -344,55 +352,57 @@ export default function TimetablePage() {
       )}
 
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
-            <h3 className="font-semibold text-lg mb-4">{editingSlot ? 'Edit Slot' : 'Add Slot'}</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Day</label>
-                <select
-                  value={form.day_of_week}
-                  onChange={e => setForm({...form, day_of_week: parseInt(e.target.value)})}
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                >
-                  {DAYS_OF_WEEK.map(d => <option key={d.idx} value={d.idx}>{d.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Period</label>
-                <select
-                  value={form.period_number}
-                  onChange={e => setForm({...form, period_number: parseInt(e.target.value)})}
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                >
-                  {DEFAULT_PERIODS.map(p => <option key={p.number} value={p.number}>{p.label} ({p.time})</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Subject / Teacher</label>
-                <select
-                  value={form.class_subject_id}
-                  onChange={e => setForm({...form, class_subject_id: e.target.value})}
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="">-- Select --</option>
-                  {classSubjects.map(cs => (
-                    <option key={cs.id} value={cs.id}>
-                      {cs.subjects?.name} — {cs.staff ? `${cs.staff.first_name} ${cs.staff.last_name}` : 'Unassigned'}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex gap-2 pt-2">
-                <button onClick={handleSaveSlot} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">Save</button>
-                {editingSlot && (
-                  <button onClick={() => { handleDeleteSlot(editingSlot.id); setShowModal(false); }} className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm">Delete</button>
-                )}
-                <button onClick={() => setShowModal(false)} className="border px-4 py-2 rounded-lg text-sm">Cancel</button>
+        <CanAct module="timetable" section="modal" element="Add/Edit slot">
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+              <h3 className="font-semibold text-lg mb-4">{editingSlot ? 'Edit Slot' : 'Add Slot'}</h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Day</label>
+                  <select
+                    value={form.day_of_week}
+                    onChange={e => setForm({...form, day_of_week: parseInt(e.target.value)})}
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                  >
+                    {DAYS_OF_WEEK.map(d => <option key={d.idx} value={d.idx}>{d.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Period</label>
+                  <select
+                    value={form.period_number}
+                    onChange={e => setForm({...form, period_number: parseInt(e.target.value)})}
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                  >
+                    {DEFAULT_PERIODS.map(p => <option key={p.number} value={p.number}>{p.label} ({p.time})</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Subject / Teacher</label>
+                  <select
+                    value={form.class_subject_id}
+                    onChange={e => setForm({...form, class_subject_id: e.target.value})}
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                  >
+                    <option value="">-- Select --</option>
+                    {classSubjects.map(cs => (
+                      <option key={cs.id} value={cs.id}>
+                        {cs.subjects?.name} — {cs.staff ? `${cs.staff.first_name} ${cs.staff.last_name}` : 'Unassigned'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button onClick={handleSaveSlot} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">Save</button>
+                  {editingSlot && (
+                    <button onClick={() => { handleDeleteSlot(editingSlot.id); setShowModal(false); }} className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm">Delete</button>
+                  )}
+                  <button onClick={() => setShowModal(false)} className="border px-4 py-2 rounded-lg text-sm">Cancel</button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        </CanAct>
       )}
     </div>
   );

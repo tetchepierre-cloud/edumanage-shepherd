@@ -7,6 +7,7 @@ import { generateFeesReport } from '../lib/feesReportGenerator'
 import { generateStudentStatement } from '../lib/statementGenerator'
 import { generateDiscountReport } from '../lib/discountReportGenerator'
 import { generateClassBalanceReport } from '../lib/classBalanceReportGenerator'
+import { CanAct, CanSee } from '../components/PermissionGate'
 
 const PAYMENT_TYPES  = ['Tuition', 'Uniform', 'Books', 'Exam', 'Other']
 const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Bank Transfer', 'Cheque']
@@ -29,7 +30,6 @@ export default function FeesPage() {
   const [filterYear,   setFilterYear]   = useState('')
   const [studentSearch, setStudentSearch] = useState('')
 
-  // ── Lignes de frais dynamiques ─────────────────────────────────────────
   const [feeLines, setFeeLines] = useState([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
 
   const addFeeLine = () => setFeeLines(prev => [...prev, { type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
@@ -58,7 +58,6 @@ export default function FeesPage() {
     logo:        null,
   })
 
-  // ── États pour le modal du rapport des frais ──────────────────────────
   const [showReportModal, setShowReportModal] = useState(false)
   const [showOnlyActive, setShowOnlyActive] = useState(true)
   const [reportParams, setReportParams] = useState({
@@ -70,7 +69,6 @@ export default function FeesPage() {
     tableType: '1',
   })
 
-  // ── États pour le modal du relevé de compte ──────────────────────────
   const [showStatementModal, setShowStatementModal] = useState(false)
   const [statementSearch, setStatementSearch] = useState('')
   const [statementStudent, setStatementStudent] = useState(null)
@@ -81,11 +79,9 @@ export default function FeesPage() {
     customTo: '',
   })
 
-  // ── États pour le modal du rapport des réductions ────────────────────
   const [showDiscountReportModal, setShowDiscountReportModal] = useState(false)
   const [discountReportYear, setDiscountReportYear] = useState('2025/2026')
 
-  // ── États pour le modal Class Balance ────────────────────────────────
   const [showClassBalanceModal, setShowClassBalanceModal] = useState(false)
   const [selectedBalanceClass, setSelectedBalanceClass] = useState('')
   const [selectedBalanceYear, setSelectedBalanceYear] = useState('2025/2026')
@@ -113,7 +109,6 @@ export default function FeesPage() {
     setLoading(false)
   }
 
-  // ── Recherche d'élèves sans filtre d'activité ─────────────────────────
   const fetchStudents = async () => {
     const { data } = await supabase
       .from('students')
@@ -159,37 +154,28 @@ export default function FeesPage() {
     )
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // Retourne les montants ANNUELS avec le type original (après réductions)
-  // ═══════════════════════════════════════════════════════════════════════
   const getExpectedFeeItems = async (studentId, academicYear) => {
     const { data: student, error: studentErr } = await supabase
       .from('students')
       .select('class_id, classes(name)')
       .eq('id', studentId)
       .single()
-
     if (studentErr || !student?.classes) {
       console.warn('Classe introuvable pour l’élève', studentId)
       return []
     }
-
     const className = student.classes.name.trim()
     const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
-
     const { data: levelData, error: levelErr } = await supabase
       .from('levels')
       .select('id')
       .ilike('name', levelName)
       .maybeSingle()
-
     if (levelErr || !levelData) {
       console.warn('Niveau introuvable pour', levelName)
       return []
     }
-
     const levelId = levelData.id
-
     const { data: fees, error: feesErr } = await supabase
       .from('fee_structure')
       .select('id, fee_name, fee_type, amount, is_mandatory, required_for_admission')
@@ -197,22 +183,18 @@ export default function FeesPage() {
       .eq('academic_year', academicYear)
       .eq('is_active', true)
       .order('is_mandatory', { ascending: false })
-
     if (feesErr || !fees || fees.length === 0) {
       console.warn('Aucun frais trouvé pour level_id', levelId, 'et année', academicYear)
       return []
     }
-
     const { data: discounts } = await supabase
       .from('student_fee_discounts')
       .select('fee_structure_id, discount_type, discount_value')
       .eq('student_id', studentId)
-
     const discountMap = {}
     ;(discounts || []).forEach(d => {
       discountMap[d.fee_structure_id] = d
     })
-
     return fees.map(f => {
       let originalAmount = parseFloat(f.amount)
       let finalAmount = originalAmount
@@ -227,27 +209,22 @@ export default function FeesPage() {
       return {
         description: `${f.fee_name} (${f.fee_type})`,
         expected: parseFloat(finalAmount.toFixed(2)),
-        type: f.fee_name,      // <-- libellé complet "School Fees"
+        type: f.fee_name,
         feeStructureId: f.id,
         requiredForAdmission: f.required_for_admission,
       }
     })
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // Calcule le restant dû par type pour un élève (avec réductions)
-  // ═══════════════════════════════════════════════════════════════════════
   const getRemainingFeesForStudent = async (studentId, academicYear) => {
     const feeStructure = await getExpectedFeeItems(studentId, academicYear)
     if (!feeStructure.length) return []
-
     const { data: payments } = await supabase
       .from('fee_payments')
       .select('amount, payment_type, fee_items, status')
       .eq('student_id', studentId)
       .eq('academic_year', academicYear)
       .in('status', ['paid', 'partial'])
-
     const paidByType = {}
     ;(payments || []).forEach(p => {
       if (p.fee_items && Array.isArray(p.fee_items) && p.fee_items.length > 0) {
@@ -260,13 +237,12 @@ export default function FeesPage() {
         paidByType[key] = (paidByType[key] || 0) + parseFloat(p.amount || 0)
       }
     })
-
     return feeStructure.map(f => {
       const annual = f.expected
       const alreadyPaid = paidByType[f.type.toLowerCase()] || 0
       const remaining = Math.max(0, annual - alreadyPaid)
       return {
-        type: f.type,   // déjà le nom complet
+        type: f.type,
         label: f.description.split(' (')[0],
         annual,
         alreadyPaid,
@@ -277,50 +253,38 @@ export default function FeesPage() {
     })
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // Mise à jour automatique du statut actif (corrigée)
-  // ═══════════════════════════════════════════════════════════════════════
   const updateStudentActiveStatus = async (studentId, academicYear) => {
     const { data: student } = await supabase
       .from('students')
       .select('min_payment_override, class_id, classes(name)')
       .eq('id', studentId)
       .single()
-
     if (!student?.classes?.name) return
-
     const className = student.classes.name.trim()
     const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
-
     const { data: level } = await supabase
       .from('levels')
       .select('id, min_payment')
       .ilike('name', levelName)
       .maybeSingle()
-
     const minPayment = student.min_payment_override ?? level?.min_payment ?? 0
-
     const { data: fees } = await supabase
       .from('fee_structure')
       .select('id, amount, fee_name, fee_type')
       .eq('level_id', level?.id)
       .eq('academic_year', academicYear)
       .eq('required_for_admission', true)
-
     if (!fees?.length) {
       await supabase.from('students').update({ active: true }).eq('id', studentId)
       setStudents(prev => prev.map(s => s.id === studentId ? { ...s, active: true } : s))
       return
     }
-
     const { data: discounts } = await supabase
       .from('student_fee_discounts')
       .select('fee_structure_id, discount_type, discount_value')
       .eq('student_id', studentId)
-
     const discountMap = {}
     ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
-
     let totalRequiredAmount = 0
     fees.forEach(f => {
       let amount = parseFloat(f.amount)
@@ -331,14 +295,12 @@ export default function FeesPage() {
       }
       totalRequiredAmount += amount
     })
-
     const { data: payments } = await supabase
       .from('fee_payments')
       .select('amount, fee_items, payment_type')
       .eq('student_id', studentId)
       .eq('academic_year', academicYear)
       .in('status', ['paid', 'partial'])
-
     let totalPaidRequired = 0
     ;(payments || []).forEach(p => {
       if (p.fee_items && Array.isArray(p.fee_items) && p.fee_items.length > 0) {
@@ -356,13 +318,11 @@ export default function FeesPage() {
         }
       }
     })
-
     const newActive = totalPaidRequired >= minPayment
     await supabase.from('students').update({ active: newActive }).eq('id', studentId)
     setStudents(prev => prev.map(s => s.id === studentId ? { ...s, active: newActive } : s))
   }
 
-  // ── Ouvertures de modaux ──────────────────────────────────────────────
   const openAddForm = async () => {
     await fetchStudents()
     setEditPayment(null)
@@ -416,10 +376,8 @@ export default function FeesPage() {
       payment.student_id,
       payment.academic_year || '2024/2025',
     )
-
     let feeItems = []
     const amountPaid = parseFloat(payment.amount || 0)
-
     if (payment.fee_items && Array.isArray(payment.fee_items) && payment.fee_items.length > 0) {
       feeItems = payment.fee_items.map(fi => ({
         description: fi.type,
@@ -449,7 +407,6 @@ export default function FeesPage() {
         paid: amountPaid,
       }]
     }
-
     await printReceipt(
       { ...payment, feeItems, collected_by_name: payment.collected_by_name || 'Accountant' },
       schoolConfig
@@ -470,29 +427,22 @@ export default function FeesPage() {
   }
   const handleOpenDiscountReport = () => setShowDiscountReportModal(true)
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // Enregistrement d'un paiement
-  // ═══════════════════════════════════════════════════════════════════════
   const handleSave = async (e) => {
     e.preventDefault()
     setSaving(true)
     setMessage('')
-
     if (!form.student_id) {
       setMessage('❌ Please select a student.')
       setSaving(false)
       return
     }
-
     const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year)
-
     const validLines = feeLines.filter(l => parseFloat(l.amount) > 0)
     if (validLines.length === 0) {
       setMessage('❌ Add at least one fee item with amount > 0.')
       setSaving(false)
       return
     }
-
     for (const line of validLines) {
       const remaining = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
       if (remaining && parseFloat(line.amount) > remaining.remaining) {
@@ -501,11 +451,8 @@ export default function FeesPage() {
         return
       }
     }
-
     const totalAmount = validLines.reduce((sum, l) => sum + parseFloat(l.amount), 0)
-
     const receiptNum = editPayment ? form.receipt_number.trim() : await generateReceiptNumber()
-
     const payload = {
       student_id:     form.student_id,
       amount:         totalAmount,
@@ -518,7 +465,6 @@ export default function FeesPage() {
       notes:          form.notes.trim() || null,
       fee_items:      validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
     }
-
     try {
       if (editPayment) {
         const oldPayment = payments.find(p => p.id === editPayment.id)
@@ -528,9 +474,7 @@ export default function FeesPage() {
           .eq('id', editPayment.id)
           .select()
           .single()
-
         if (error) throw error
-
         await logAction({
           action:      'UPDATE',
           tableName:   'fee_payments',
@@ -540,27 +484,21 @@ export default function FeesPage() {
           description: `Updated fee payment — ${data.payment_type} GHS ${data.amount} `
                      + `(${data.academic_year}) · Receipt: ${data.receipt_number}`,
         })
-
         await updateStudentActiveStatus(form.student_id, form.academic_year)
-
         setMessage('✅ Payment updated successfully!')
         await fetchPayments()
         setTimeout(() => setShowForm(false), 1200)
-
       } else {
         const { data, error } = await supabase
           .from('fee_payments')
           .insert([payload])
           .select()
           .single()
-
         if (error) throw error
-
         const student = students.find(s => s.id === data.student_id)
         const studentName = student
           ? `${student.first_name} ${student.last_name}`
           : 'Unknown student'
-
         await logAction({
           action:      'CREATE',
           tableName:   'fee_payments',
@@ -571,22 +509,18 @@ export default function FeesPage() {
                      + `GHS ${data.amount} · ${data.status} · ${data.academic_year} `
                      + `· Receipt: ${data.receipt_number}`,
         })
-
         await updateStudentActiveStatus(form.student_id, form.academic_year)
-
         const { data: fullPayment } = await supabase
           .from('fee_payments')
           .select('*, students(first_name, last_name, class_id, classes(name))')
           .eq('id', data.id)
           .single()
-
         if (fullPayment) {
           const feeItems = validLines.map(l => ({
             description: l.type,
             expected: parseFloat(l.amount),
             paid: parseFloat(l.amount),
           }))
-
           const { data: { user } } = await supabase.auth.getUser()
           let collectorName = 'Accountant'
           if (user) {
@@ -597,18 +531,15 @@ export default function FeesPage() {
               .single()
             collectorName = profile?.full_name || 'Accountant'
           }
-
           await printReceipt(
             { ...fullPayment, feeItems, collected_by_name: collectorName },
             schoolConfig
           )
         }
-
         setMessage('✅ Payment recorded & receipt printed!')
         await fetchPayments()
         setTimeout(() => setShowForm(false), 1200)
       }
-
     } catch (err) {
       setMessage(`❌ Error: ${err.message}`)
     } finally {
@@ -618,18 +549,15 @@ export default function FeesPage() {
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this payment record?')) return
-
     const paymentToDelete = payments.find(p => p.id === id)
     const student = students.find(s => s.id === paymentToDelete?.student_id)
     const studentName = student
       ? `${student.first_name} ${student.last_name}`
       : 'Unknown student'
-
     const { error } = await supabase
       .from('fee_payments')
       .delete()
       .eq('id', id)
-
     if (!error) {
       await logAction({
         action:      'DELETE',
@@ -641,7 +569,6 @@ export default function FeesPage() {
                    + `${paymentToDelete?.payment_type} GHS ${paymentToDelete?.amount} `
                    + `· Receipt: ${paymentToDelete?.receipt_number}`,
       })
-
       setPayments(prev => prev.filter(p => p.id !== id))
     } else {
       setMessage(`❌ Error: ${error.message}`)
@@ -661,11 +588,9 @@ export default function FeesPage() {
   const totalCollected = filtered
     .filter(p => p.status === 'paid')
     .reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
-
   const totalPending = filtered
     .filter(p => p.status === 'pending')
     .reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
-
   const totalPartial = filtered
     .filter(p => p.status === 'partial')
     .reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
@@ -679,13 +604,21 @@ export default function FeesPage() {
           <p className="text-gray-500 text-sm">{payments.length} payment records</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={openAddForm} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2">➕ Record Payment</button>
-          <button onClick={handleGenerateReport} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Fees Collection Report">📊 Fees Report</button>
-          <button onClick={handleOpenStatementModal} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Student Statement">📄 Statement</button>
-          <button onClick={handleOpenDiscountReport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Discount Report">🏷️ Discounts</button>
-          <button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Class Balance Report">
-            📊 Class Balance
-          </button>
+          <CanAct module="fees" section="header" element="Record Payment button">
+            <button onClick={openAddForm} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2">➕ Record Payment</button>
+          </CanAct>
+          <CanAct module="fees" section="header" element="Fees Report button">
+            <button onClick={handleGenerateReport} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Fees Collection Report">📊 Fees Report</button>
+          </CanAct>
+          <CanAct module="fees" section="header" element="Student Statement button">
+            <button onClick={handleOpenStatementModal} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Student Statement">📄 Statement</button>
+          </CanAct>
+          <CanAct module="fees" section="header" element="Discounts button">
+            <button onClick={handleOpenDiscountReport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Discount Report">🏷️ Discounts</button>
+          </CanAct>
+          <CanAct module="fees" section="header" element="Class Balance button">
+            <button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Class Balance Report">📊 Class Balance</button>
+          </CanAct>
         </div>
       </div>
 
@@ -709,78 +642,98 @@ export default function FeesPage() {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm p-4 flex flex-wrap gap-3">
-        <input type="text" placeholder="🔍 Search student or receipt..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 min-w-48 px-4 py-2 border border-gray-300 rounded-lg text-sm" />
-        <select value={filterClass} onChange={e => setFilterClass(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          <option value="">All Classes</option>
-          {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          <option value="">All Status</option>
-          {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-        </select>
-        <select value={filterYear} onChange={e => setFilterYear(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          <option value="">All Years</option>
-          {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-        </select>
+        <CanSee module="fees" section="filters" element="Search field">
+          <input type="text" placeholder="🔍 Search student or receipt..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 min-w-48 px-4 py-2 border border-gray-300 rounded-lg text-sm" />
+        </CanSee>
+        <CanSee module="fees" section="filters" element="Class select">
+          <select value={filterClass} onChange={e => setFilterClass(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
+            <option value="">All Classes</option>
+            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </CanSee>
+        <CanSee module="fees" section="filters" element="Status select">
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
+            <option value="">All Status</option>
+            {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+          </select>
+        </CanSee>
+        <CanSee module="fees" section="filters" element="Year select">
+          <select value={filterYear} onChange={e => setFilterYear(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
+            <option value="">All Years</option>
+            {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </CanSee>
         <button onClick={() => { setSearch(''); setFilterClass(''); setFilterStatus(''); setFilterYear('') }} className="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Clear</button>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm overflow-auto max-h-[65vh]">
-        {loading ? (
-          <div className="text-center py-12"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3" /><p className="text-gray-500">Loading payments...</p></div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-12"><p className="text-4xl mb-2">💳</p><p className="text-gray-500">No payment records found</p></div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b">
-                <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                  <th className="px-6 py-4">#</th>
-                  <th className="px-6 py-4">Receipt</th>
-                  <th className="px-6 py-4">Student</th>
-                  <th className="px-6 py-4">Class</th>
-                  <th className="px-6 py-4">Type</th>
-                  <th className="px-6 py-4">Method</th>
-                  <th className="px-6 py-4">Amount</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Date</th>
-                  <th className="px-6 py-4">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filtered.map((payment, index) => (
-                  <tr key={payment.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4 text-gray-400 text-sm">{index + 1}</td>
-                    <td className="px-6 py-4 text-xs font-mono text-gray-600">{payment.receipt_number}</td>
-                    <td className="px-6 py-4 font-medium text-gray-900">{payment.students?.first_name} {payment.students?.last_name}</td>
-                    <td className="px-6 py-4 text-gray-600">{payment.students?.classes?.name || '—'}</td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {payment.payment_type === 'Multiple' && payment.fee_items?.length
-                        ? payment.fee_items.map((fi, idx) => (<div key={idx}>{fi.type}</div>))
-                        : payment.payment_type}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">{payment.payment_method}</td>
-                    <td className="px-6 py-4 font-semibold text-gray-900">{formatAmount(payment.amount)}</td>
-                    <td className="px-6 py-4">{statusBadge(payment.status)}</td>
-                    <td className="px-6 py-4 text-gray-500 text-sm">
-                      {payment.payment_date ? formatDate(payment.payment_date) : formatDate(payment.created_at)}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex gap-2">
-                        <button onClick={() => openEditForm(payment)} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-2 py-1 rounded hover:bg-blue-50">✏️ Edit</button>
-                        <button onClick={() => handlePrintReceipt(payment)} className="text-green-600 hover:text-green-800 text-sm font-medium px-2 py-1 rounded hover:bg-green-50">🖨️ Print</button>
-                        <button onClick={() => handleDelete(payment.id)} className="text-red-500 hover:text-red-700 text-sm font-medium px-2 py-1 rounded hover:bg-red-50">🗑️ Del</button>
-                      </div>
-                    </td>
+        <CanSee module="fees" section="table" element="Payment rows">
+          {loading ? (
+            <div className="text-center py-12"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3" /><p className="text-gray-500">Loading payments...</p></div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-12"><p className="text-4xl mb-2">💳</p><p className="text-gray-500">No payment records found</p></div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b">
+                  <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                    <th className="px-6 py-4">#</th>
+                    <th className="px-6 py-4">Receipt</th>
+                    <th className="px-6 py-4">Student</th>
+                    <th className="px-6 py-4">Class</th>
+                    <th className="px-6 py-4">Type</th>
+                    <th className="px-6 py-4">Method</th>
+                    <th className="px-6 py-4">Amount</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Date</th>
+                    <th className="px-6 py-4">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filtered.map((payment, index) => (
+                    <tr key={payment.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-6 py-4 text-gray-400 text-sm">{index + 1}</td>
+                      <td className="px-6 py-4 text-xs font-mono text-gray-600">{payment.receipt_number}</td>
+                      <td className="px-6 py-4 font-medium text-gray-900">{payment.students?.first_name} {payment.students?.last_name}</td>
+                      <td className="px-6 py-4 text-gray-600">{payment.students?.classes?.name || '—'}</td>
+                      <td className="px-6 py-4 text-gray-600">
+                        {payment.payment_type === 'Multiple' && payment.fee_items?.length
+                          ? payment.fee_items.map((fi, idx) => (<div key={idx}>{fi.type}</div>))
+                          : payment.payment_type}
+                      </td>
+                      <td className="px-6 py-4 text-gray-600">{payment.payment_method}</td>
+                      <td className="px-6 py-4 font-semibold text-gray-900">{formatAmount(payment.amount)}</td>
+                      <td className="px-6 py-4">{statusBadge(payment.status)}</td>
+                      <td className="px-6 py-4 text-gray-500 text-sm">
+                        {payment.payment_date ? formatDate(payment.payment_date) : formatDate(payment.created_at)}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex gap-2">
+                          <CanAct module="fees" section="table" element="Edit button">
+                            <button onClick={() => openEditForm(payment)} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-2 py-1 rounded hover:bg-blue-50">✏️ Edit</button>
+                          </CanAct>
+                          <CanAct module="fees" section="table" element="Print button">
+                            <button onClick={() => handlePrintReceipt(payment)} className="text-green-600 hover:text-green-800 text-sm font-medium px-2 py-1 rounded hover:bg-green-50">🖨️ Print</button>
+                          </CanAct>
+                          <CanAct module="fees" section="table" element="Delete button">
+                            <button onClick={() => handleDelete(payment.id)} className="text-red-500 hover:text-red-700 text-sm font-medium px-2 py-1 rounded hover:bg-red-50">🗑️ Del</button>
+                          </CanAct>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CanSee>
       </div>
 
-      {/* ── Modal du formulaire de paiement ── */}
+      {/* Modal forms (Report, Statement, Discount, Class Balance) and Add/Edit modal remain conditionally rendered as before */}
+      {/* They are not wrapped with permissions since they are triggered by actions already controlled */}
+      {/* For completeness, the report modals can be wrapped if needed, but they are already based on state */}
+      {/* We keep the existing modal logic unchanged */}
+
       {showForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -788,99 +741,95 @@ export default function FeesPage() {
               <h3 className="text-lg font-bold text-gray-900">{editPayment ? '✏️ Edit Payment' : '➕ Record Payment'}</h3>
               <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
             </div>
-            <form onSubmit={handleSave} className="p-6 space-y-4">
-              {message && (<div className={`px-4 py-3 rounded-lg text-sm font-medium ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>)}
-              <div className="relative">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Student <span className="text-red-500">*</span></label>
-                <input type="text" placeholder="Type name to search..." value={studentSearch} onChange={e => { setStudentSearch(e.target.value); setForm(f => ({ ...f, student_id: '' })) }} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" autoComplete="off" />
-                {studentSearch.length > 0 && form.student_id === '' && (
-                  <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto top-full">
-                    {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).slice(0, 10).map(s => (
-                      <div key={s.id} onClick={async () => { setForm(f => ({ ...f, student_id: s.id })); setStudentSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`); const remaining = await getRemainingFeesForStudent(s.id, form.academic_year); if (remaining && remaining.length > 0) { setFeeLines(remaining.map(r => ({ type: r.type, amount: '', max: r.remaining, label: r.label, remaining: r.remaining, locked: true, feeStructureId: r.feeStructureId }))) } else { setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }]) } }} className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0">
-                        <span className="font-medium">{s.first_name} {s.last_name}</span><span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span>
+            <CanAct module="fees" section="modal" element="Payment form">
+              <form onSubmit={handleSave} className="p-6 space-y-4">
+                {message && (<div className={`px-4 py-3 rounded-lg text-sm font-medium ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>)}
+                <div className="relative">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Student <span className="text-red-500">*</span></label>
+                  <input type="text" placeholder="Type name to search..." value={studentSearch} onChange={e => { setStudentSearch(e.target.value); setForm(f => ({ ...f, student_id: '' })) }} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" autoComplete="off" />
+                  {studentSearch.length > 0 && form.student_id === '' && (
+                    <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto top-full">
+                      {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).slice(0, 10).map(s => (
+                        <div key={s.id} onClick={async () => { setForm(f => ({ ...f, student_id: s.id })); setStudentSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`); const remaining = await getRemainingFeesForStudent(s.id, form.academic_year); if (remaining && remaining.length > 0) { setFeeLines(remaining.map(r => ({ type: r.type, amount: '', max: r.remaining, label: r.label, remaining: r.remaining, locked: true, feeStructureId: r.feeStructureId }))) } else { setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }]) } }} className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0">
+                          <span className="font-medium">{s.first_name} {s.last_name}</span><span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span>
+                        </div>
+                      ))}
+                      {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).length === 0 && (<div className="px-3 py-2 text-sm text-gray-400">No student found</div>)}
+                    </div>
+                  )}
+                  {form.student_id && (<div className="mt-1 text-xs text-green-600 font-medium">✓ Student selected</div>)}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Fee Items</label>
+                  <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
+                    {feeLines.map((line, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <select value={line.type} onChange={e => updateFeeLine(idx, 'type', e.target.value)} disabled={line.locked} className={`flex-1 px-2 py-1 border rounded text-sm ${line.locked ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}>
+                          {PAYMENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                          {!PAYMENT_TYPES.includes(line.type) && (<option value={line.type}>{line.type}</option>)}
+                        </select>
+                        <input type="number" placeholder="0.00" value={line.amount} onChange={e => { const val = parseFloat(e.target.value) || 0; if (val > line.max) return; updateFeeLine(idx, 'amount', e.target.value) }} className="w-28 px-2 py-1 border border-gray-300 rounded text-sm" min="0" step="0.01" />
+                        {line.max > 0 && (<span className="text-xs text-gray-400">max {formatAmount(line.max)}</span>)}
+                        {!line.locked && feeLines.length > 1 && (<button type="button" onClick={() => removeFeeLine(idx)} className="text-red-500 hover:text-red-700 text-lg">×</button>)}
                       </div>
                     ))}
-                    {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).length === 0 && (<div className="px-3 py-2 text-sm text-gray-400">No student found</div>)}
+                  </div>
+                  <div className="mt-2 text-right"><span className="text-sm font-bold text-gray-700">Total remaining: {formatAmount(feeLines.reduce((sum, l) => sum + (l.max || 0), 0))}</span></div>
+                  <button type="button" onClick={addFeeLine} className="mt-1 text-blue-600 hover:text-blue-800 text-sm">+ Add fee line</button>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 text-right">
+                  <span className="text-sm font-semibold text-gray-700">Total: </span>
+                  <span className="text-lg font-bold text-blue-600">{formatAmount(feeLines.reduce((sum, l) => sum + parseFloat(l.amount || 0), 0))}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                    <select value={form.payment_method} onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                      {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+                    <select value={form.academic_year} onChange={e => setForm(f => ({ ...f, academic_year: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                      {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label>
+                    <input type="date" value={form.payment_date} onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Number</label>
+                    <input type="text" value={form.receipt_number} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono bg-gray-50 text-gray-500 cursor-not-allowed" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
+                  <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none" placeholder="Any additional notes..." />
+                </div>
+                {editPayment && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                    <input type="text" value={form.status.charAt(0).toUpperCase() + form.status.slice(1)} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-not-allowed" />
                   </div>
                 )}
-                {form.student_id && (<div className="mt-1 text-xs text-green-600 font-medium">✓ Student selected</div>)}
-              </div>
-
-              {/* ── Lignes de frais dynamiques ── */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Fee Items</label>
-                <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
-                  {feeLines.map((line, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <select value={line.type} onChange={e => updateFeeLine(idx, 'type', e.target.value)} disabled={line.locked} className={`flex-1 px-2 py-1 border rounded text-sm ${line.locked ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}>
-                        {PAYMENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                        {!PAYMENT_TYPES.includes(line.type) && (<option value={line.type}>{line.type}</option>)}
-                      </select>
-                      <input type="number" placeholder="0.00" value={line.amount} onChange={e => { const val = parseFloat(e.target.value) || 0; if (val > line.max) return; updateFeeLine(idx, 'amount', e.target.value) }} className="w-28 px-2 py-1 border border-gray-300 rounded text-sm" min="0" step="0.01" />
-                      {line.max > 0 && (<span className="text-xs text-gray-400">max {formatAmount(line.max)}</span>)}
-                      {!line.locked && feeLines.length > 1 && (<button type="button" onClick={() => removeFeeLine(idx)} className="text-red-500 hover:text-red-700 text-lg">×</button>)}
-                    </div>
-                  ))}
+                <div className="flex gap-3 pt-2">
+                  <button type="button" onClick={() => setShowForm(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
+                  <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm disabled:opacity-50">
+                    {saving ? '⏳ Saving...' : editPayment ? '✅ Update' : '✅ Save Payment'}
+                  </button>
                 </div>
-                <div className="mt-2 text-right"><span className="text-sm font-bold text-gray-700">Total remaining: {formatAmount(feeLines.reduce((sum, l) => sum + (l.max || 0), 0))}</span></div>
-                <button type="button" onClick={addFeeLine} className="mt-1 text-blue-600 hover:text-blue-800 text-sm">+ Add fee line</button>
-              </div>
-
-              {/* Affichage du total */}
-              <div className="bg-gray-50 rounded-lg p-3 text-right">
-                <span className="text-sm font-semibold text-gray-700">Total: </span>
-                <span className="text-lg font-bold text-blue-600">{formatAmount(feeLines.reduce((sum, l) => sum + parseFloat(l.amount || 0), 0))}</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
-                  <select value={form.payment_method} onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                    {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                  <select value={form.academic_year} onChange={e => setForm(f => ({ ...f, academic_year: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                    {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label>
-                  <input type="date" value={form.payment_date} onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Number</label>
-                  <input type="text" value={form.receipt_number} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono bg-gray-50 text-gray-500 cursor-not-allowed" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
-                <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none" placeholder="Any additional notes..." />
-              </div>
-
-              {/* Statut en lecture seule uniquement en édition */}
-              {editPayment && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                  <input type="text" value={form.status.charAt(0).toUpperCase() + form.status.slice(1)} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-not-allowed" />
-                </div>
-              )}
-
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowForm(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
-                <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm disabled:opacity-50">
-                  {saving ? '⏳ Saving...' : editPayment ? '✅ Update' : '✅ Save Payment'}
-                </button>
-              </div>
-            </form>
+              </form>
+            </CanAct>
           </div>
         </div>
       )}
 
-      {/* ── Modal du rapport des frais ── */}
+      {/* Other modals: Report, Statement, Discount, Class Balance are left as they were, without permissions since they are triggered from buttons already gated */}
+      {/* They can be accessed if the user has the button visible. No additional changes needed. */}
+
       {showReportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
@@ -922,12 +871,10 @@ export default function FeesPage() {
                   <option value="2">By student</option>
                 </select>
               </div>
-
               <div className="flex items-center gap-2 mt-2">
                 <input type="checkbox" id="showOnlyActive" checked={showOnlyActive} onChange={e => setShowOnlyActive(e.target.checked)} className="h-4 w-4 text-blue-600 rounded" />
                 <label htmlFor="showOnlyActive" className="text-sm text-gray-700">Show only students with payment in period</label>
               </div>
-
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowReportModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
                 <button type="button" onClick={async () => {
@@ -960,7 +907,6 @@ export default function FeesPage() {
         </div>
       )}
 
-      {/* ── Modal du relevé de compte ── */}
       {showStatementModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
@@ -1036,7 +982,6 @@ export default function FeesPage() {
         </div>
       )}
 
-      {/* ── Modal du rapport des réductions ── */}
       {showDiscountReportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto">
@@ -1047,24 +992,15 @@ export default function FeesPage() {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                <select
-                  value={discountReportYear}
-                  onChange={e => setDiscountReportYear(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                >
-                  <option value="2024/2025">2024/2025</option>
-                  <option value="2025/2026">2025/2026</option>
-                  <option value="2026/2027">2026/2027</option>
+                <select value={discountReportYear} onChange={e => setDiscountReportYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="2024/2025">2024/2025</option><option value="2025/2026">2025/2026</option><option value="2026/2027">2026/2027</option>
                 </select>
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowDiscountReportModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
                 <button type="button" onClick={async () => {
                   setShowDiscountReportModal(false)
-                  await generateDiscountReport({
-                    academicYear: discountReportYear,
-                    schoolConfig,
-                  })
+                  await generateDiscountReport({ academicYear: discountReportYear, schoolConfig })
                 }} className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium text-sm">Generate</button>
               </div>
             </div>
@@ -1072,7 +1008,6 @@ export default function FeesPage() {
         </div>
       )}
 
-          {/* ── Modal Class Balance Report ── */}
       {showClassBalanceModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
@@ -1099,12 +1034,7 @@ export default function FeesPage() {
                   if (!selectedBalanceClass) return
                   setShowClassBalanceModal(false)
                   const className = classes.find(c => c.id === selectedBalanceClass)?.name || 'Class'
-                  await generateClassBalanceReport({
-                    className,
-                    classId: selectedBalanceClass,
-                    academicYear: selectedBalanceYear,
-                    schoolConfig,
-                  })
+                  await generateClassBalanceReport({ className, classId: selectedBalanceClass, academicYear: selectedBalanceYear, schoolConfig })
                 }}
                 className="w-full bg-teal-600 text-white py-2 rounded-lg font-medium hover:bg-teal-700"
               >

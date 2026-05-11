@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Plus, Trash2, Save, Lock, AlertTriangle } from 'lucide-react';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 const DEFAULT_CA_COMPONENTS = [
   { name: 'Class Exercises', weight: 20 },
@@ -111,7 +112,7 @@ export default function GradeEntryPage() {
     if (!selectedSequence || !selectedSubject || students.length === 0) return;
     setSaving(true); setMessage('');
     const payload = students
-      .filter(s => grades[s.id]?.source !== 'ca') // on ne réécrit pas celles qui sont CA
+      .filter(s => grades[s.id]?.source !== 'ca')
       .map(s => ({
         student_id: s.id,
         class_subject_id: selectedSubject,
@@ -162,7 +163,6 @@ export default function GradeEntryPage() {
   };
 
   const handleCalculateAndSave = async () => {
-    // Sauvegarder d'abord les scores CA
     const caPayload = [];
     students.forEach(s => {
       caComponents.forEach(c => {
@@ -179,7 +179,6 @@ export default function GradeEntryPage() {
       if (caError) { setCaMessage('Error saving CA scores: ' + caError.message); return; }
     }
 
-    // Calculer la moyenne pondérée
     const calculatedGrades = {};
     students.forEach(s => {
       let totalWeight = 0, weightedSum = 0;
@@ -191,7 +190,6 @@ export default function GradeEntryPage() {
       if (totalWeight > 0) calculatedGrades[s.id] = parseFloat((weightedSum / totalWeight).toFixed(2));
     });
 
-    // Enregistrer dans grades avec source = 'ca'
     const gradePayload = students.map(s => ({
       student_id: s.id,
       class_subject_id: selectedSubject,
@@ -228,41 +226,51 @@ export default function GradeEntryPage() {
           </p>
         </div>
         {selectedSubject && (
-          <button
-            onClick={() => { setCaMode(!caMode); setCaMessage(''); }}
-            className={`px-4 py-2 rounded-lg text-sm font-medium ${caMode ? 'bg-gray-200 text-gray-700' : 'bg-purple-600 text-white hover:bg-purple-700'}`}
-          >
-            {caMode ? 'Back to Direct Entry' : 'Continuous Assessment'}
-          </button>
+          <CanAct module="grades" section="header" element="Continuous Assessment toggle">
+            <button
+              onClick={() => { setCaMode(!caMode); setCaMessage(''); }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${caMode ? 'bg-gray-200 text-gray-700' : 'bg-purple-600 text-white hover:bg-purple-700'}`}
+            >
+              {caMode ? 'Back to Direct Entry' : 'Continuous Assessment'}
+            </button>
+          </CanAct>
         )}
       </div>
 
       {/* Filtres */}
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
-        <div><label className="block text-xs font-medium text-gray-500 mb-1">Term</label>
-          <select value={selectedTerm} onChange={e => setSelectedTerm(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[150px]">
-            <option value="">-- Select Term --</option>
-            {terms.map(t => <option key={t.id} value={t.id}>{t.name} ({t.academic_year})</option>)}
-          </select>
-        </div>
-        <div><label className="block text-xs font-medium text-gray-500 mb-1">Open Sequence</label>
-          <select value={selectedSequence} onChange={e => setSelectedSequence(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[150px]">
-            <option value="">-- Select Sequence --</option>
-            {sequences.map(s => <option key={s.id} value={s.id}>{s.name} ({s.sequence_type})</option>)}
-          </select>
-        </div>
-        <div><label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
-          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
-            <option value="">-- Select Class --</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div><label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
-          <select value={selectedSubject} onChange={e => setSelectedSubject(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
-            <option value="">-- Select Subject --</option>
-            {classSubjects.map(cs => <option key={cs.id} value={cs.id}>{cs.subjects?.name} (coeff {cs.coefficient})</option>)}
-          </select>
-        </div>
+        <CanSee module="grades" section="selectors" element="Term select">
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Term</label>
+            <select value={selectedTerm} onChange={e => setSelectedTerm(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[150px]">
+              <option value="">-- Select Term --</option>
+              {terms.map(t => <option key={t.id} value={t.id}>{t.name} ({t.academic_year})</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="grades" section="selectors" element="Sequence select">
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Open Sequence</label>
+            <select value={selectedSequence} onChange={e => setSelectedSequence(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[150px]">
+              <option value="">-- Select Sequence --</option>
+              {sequences.map(s => <option key={s.id} value={s.id}>{s.name} ({s.sequence_type})</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="grades" section="selectors" element="Class select">
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
+            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
+              <option value="">-- Select Class --</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="grades" section="selectors" element="Subject select">
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
+            <select value={selectedSubject} onChange={e => setSelectedSubject(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
+              <option value="">-- Select Subject --</option>
+              {classSubjects.map(cs => <option key={cs.id} value={cs.id}>{cs.subjects?.name} (coeff {cs.coefficient})</option>)}
+            </select>
+          </div>
+        </CanSee>
       </div>
 
       {message && <div className={`px-4 py-3 rounded-lg text-sm ${message.includes('Error') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>}
@@ -305,11 +313,13 @@ export default function GradeEntryPage() {
                               <span className="text-xs text-gray-400 ml-1">CA</span>
                             </div>
                           ) : (
-                            <input type="number" min="0" max="100" step="0.01"
-                              value={g?.score !== undefined ? g.score : ''}
-                              onChange={e => handleScoreChange(s.id, e.target.value)}
-                              className="w-20 text-center border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-                            />
+                            <CanAct module="grades" section="table" element="Score fields">
+                              <input type="number" min="0" max="100" step="0.01"
+                                value={g?.score !== undefined ? g.score : ''}
+                                onChange={e => handleScoreChange(s.id, e.target.value)}
+                                className="w-20 text-center border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                              />
+                            </CanAct>
                           )}
                         </td>
                       </tr>
@@ -318,10 +328,12 @@ export default function GradeEntryPage() {
                 </tbody>
               </table>
               <div className="p-4 border-t flex justify-end">
-                <button onClick={handleSaveDirect} disabled={saving}
-                  className="bg-green-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50">
-                  {saving ? 'Saving…' : 'Save Grades'}
-                </button>
+                <CanAct module="grades" section="buttons" element="Save Grades button">
+                  <button onClick={handleSaveDirect} disabled={saving}
+                    className="bg-green-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50">
+                    {saving ? 'Saving…' : 'Save Grades'}
+                  </button>
+                </CanAct>
               </div>
             </>
           )}
@@ -387,11 +399,13 @@ export default function GradeEntryPage() {
                         <td className="px-3 py-2 font-medium">{s.last_name} {s.first_name}</td>
                         {caComponents.map(c => (
                           <td key={c.id} className="px-2 py-2 text-center">
-                            <input type="number" min="0" max="100" step="0.01"
-                              value={caScores[s.id]?.[c.id] !== undefined ? caScores[s.id][c.id] : ''}
-                              onChange={e => handleCaScoreChange(s.id, c.id, e.target.value)}
-                              className="w-16 text-center border rounded px-1 py-0.5 text-xs"
-                            />
+                            <CanAct module="grades" section="table" element="CA score fields">
+                              <input type="number" min="0" max="100" step="0.01"
+                                value={caScores[s.id]?.[c.id] !== undefined ? caScores[s.id][c.id] : ''}
+                                onChange={e => handleCaScoreChange(s.id, c.id, e.target.value)}
+                                className="w-16 text-center border rounded px-1 py-0.5 text-xs"
+                              />
+                            </CanAct>
                           </td>
                         ))}
                       </tr>
@@ -400,10 +414,12 @@ export default function GradeEntryPage() {
                 </table>
               </div>
               <div className="p-4 border-t flex justify-end">
-                <button onClick={handleCalculateAndSave}
-                  className="flex items-center gap-2 bg-purple-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-purple-700">
-                  <Save size={16} /> Calculate & Save Final Grades
-                </button>
+                <CanAct module="grades" section="buttons" element="Calculate & Save button">
+                  <button onClick={handleCalculateAndSave}
+                    className="flex items-center gap-2 bg-purple-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-purple-700">
+                    <Save size={16} /> Calculate & Save Final Grades
+                  </button>
+                </CanAct>
               </div>
             </div>
           )}

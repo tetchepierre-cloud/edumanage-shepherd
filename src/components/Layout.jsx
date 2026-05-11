@@ -1,7 +1,9 @@
+// src/components/Layout.jsx
 import React, { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../stores/authStore'
+import { usePermissionsStore } from '../stores/permissionsStore'
 import {
   LayoutDashboard, Users, CreditCard, Receipt,
   Package, ClipboardList, Settings, LogOut,
@@ -37,9 +39,10 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const { profile, logout } = useAuthStore()
   const navigate = useNavigate()
-  const [permissions, setPermissions] = useState({})
+  const [permissions, setPermissions] = useState({})          // module_access (true/false)
+  const { permissions: granularPermissions, loadPermissions } = usePermissionsStore()
 
-  // Charger les permissions depuis la table module_access
+  // Charger les permissions du menu (module_access) – prioritaire
   useEffect(() => {
     if (!profile?.role) return
     supabase
@@ -52,20 +55,25 @@ export default function Layout() {
         setPermissions(perms)
       })
       .catch(() => {
-        // fallback : tout visible si erreur réseau
         const all = {}
         allNavItems.forEach(item => { if (item.module) all[item.module] = true })
         setPermissions(all)
       })
   }, [profile?.role])
 
-  // Filtrer les éléments selon les permissions
-  const navItems = allNavItems.filter(item => {
-    if (item.module === 'dashboard') return true  // Dashboard toujours visible
-    // Si les permissions ne sont pas encore chargées, on affiche tout
-    if (!permissions || Object.keys(permissions).length === 0) return true
-    return permissions[item.module] === true
-  })
+  // Charger les permissions granulaires pour le rôle connecté
+  useEffect(() => {
+    if (profile?.role) loadPermissions(profile.role)
+    else loadPermissions(null)
+  }, [profile?.role])
+
+  // Déterminer si un module a au moins une permission granulaire
+  const hasAnyGranularPermission = (module) => {
+    if (!module || !granularPermissions) return false
+    return Object.keys(granularPermissions).some(key => key.startsWith(module + '.'))
+  }
+
+  const isFullAccess = ['owner', 'director'].includes(profile?.role)
 
   const handleLogout = async () => {
     await logout()
@@ -73,6 +81,12 @@ export default function Layout() {
   }
 
   let lastGroup = null;
+
+  const navItems = allNavItems.filter(item => {
+    if (item.module === 'dashboard') return true
+    if (isFullAccess) return true
+    return true
+  })
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -91,9 +105,56 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
-          {navItems.map(({ to, icon: Icon, label, exact, group }) => {
+          {navItems.map(({ to, icon: Icon, label, exact, group, module }) => {
             const showGroupLabel = group && group !== lastGroup;
             lastGroup = group;
+
+            // Nouvelle logique de grisage
+            const moduleAccess = permissions[module];           // true | false | undefined
+            const blockedByModuleAccess = moduleAccess === false;
+            const noGranularPermission = !isFullAccess && !hasAnyGranularPermission(module);
+            const isDisabled = module && module !== 'dashboard' &&
+              (blockedByModuleAccess || (!moduleAccess && noGranularPermission));
+
+            if (module === 'dashboard' || !module) {
+              return (
+                <React.Fragment key={to}>
+                  {showGroupLabel && sidebarOpen && (
+                    <div className="pt-3 pb-1 px-3 text-xs font-semibold text-blue-300 uppercase tracking-wider">
+                      {group}
+                    </div>
+                  )}
+                  <NavLink
+                    to={to}
+                    end={exact}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${isActive ? 'bg-blue-700 text-white' : 'text-blue-200 hover:bg-blue-800 hover:text-white'}`
+                    }
+                  >
+                    <Icon size={20} />
+                    {sidebarOpen && <span className="text-sm">{label}</span>}
+                  </NavLink>
+                </React.Fragment>
+              )
+            }
+
+            if (isDisabled) {
+              return (
+                <React.Fragment key={to}>
+                  {showGroupLabel && sidebarOpen && (
+                    <div className="pt-3 pb-1 px-3 text-xs font-semibold text-blue-300 uppercase tracking-wider">
+                      {group}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3 px-3 py-2 rounded-lg text-blue-400/40 cursor-not-allowed select-none"
+                    title="No permissions granted for this module">
+                    <Icon size={20} />
+                    {sidebarOpen && <span className="text-sm">{label}</span>}
+                  </div>
+                </React.Fragment>
+              )
+            }
+
             return (
               <React.Fragment key={to}>
                 {showGroupLabel && sidebarOpen && (
@@ -105,9 +166,7 @@ export default function Layout() {
                   to={to}
                   end={exact}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
-                      isActive ? 'bg-blue-700 text-white' : 'text-blue-200 hover:bg-blue-800 hover:text-white'
-                    }`
+                    `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${isActive ? 'bg-blue-700 text-white' : 'text-blue-200 hover:bg-blue-800 hover:text-white'}`
                   }
                 >
                   <Icon size={20} />

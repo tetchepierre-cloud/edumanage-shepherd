@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { generateClassListPDF } from '../lib/classListGenerator';
 import { Download, FileText } from 'lucide-react';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 export default function ClassListPage() {
   const [classes, setClasses] = useState([]);
@@ -30,10 +31,7 @@ export default function ClassListPage() {
   const fetchClasses = async () => {
     try {
       const { data, error } = await supabase.from('classes').select('id, name').order('name');
-      console.log('fetchClasses result:', { data, error });
-      if (error) {
-        console.error('fetchClasses error:', error);
-      }
+      if (error) console.error('fetchClasses error:', error);
       setClasses(data || []);
       if (data && data.length > 0 && !selectedClass) {
         setSelectedClass(data[0].id);
@@ -52,7 +50,7 @@ export default function ClassListPage() {
       address: config.address || 'Tamale, Ghana',
       phone: config.phone || '',
       email: config.email || '',
-      logo: config.logo || null,       // ← ajouté
+      logo: config.logo || null,
     });
   };
 
@@ -72,7 +70,6 @@ export default function ClassListPage() {
     setLoading(false);
   };
 
-  // Export CSV
   const exportCSV = () => {
     const headers = ['No.', 'Full Name', 'Gender', 'Date of Birth', 'Parent/Guardian', 'Phone'];
     const rows = students.map((s, idx) => [
@@ -83,11 +80,9 @@ export default function ClassListPage() {
       s.parent_name || '',
       s.parent_phone || '',
     ]);
-
     let csvContent = 'data:text/csv;charset=utf-8,';
     csvContent += headers.join(',') + '\n';
     rows.forEach(row => csvContent += row.join(',') + '\n');
-
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
@@ -110,36 +105,42 @@ export default function ClassListPage() {
           <p className="text-gray-500 text-sm mt-1">Generate and export official class lists</p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={async () => { await generateClassListPDF({ className: selectedClassName(), students, school }); }}
-            disabled={students.length === 0}
-            className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
-          >
-            <FileText size={16} /> PDF
-          </button>
-          <button
-            onClick={exportCSV}
-            disabled={students.length === 0}
-            className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
-          >
-            <Download size={16} /> CSV
-          </button>
+          <CanAct module="class-list" section="header" element="PDF button">
+            <button
+              onClick={async () => { await generateClassListPDF({ className: selectedClassName(), students, school }); }}
+              disabled={students.length === 0}
+              className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
+            >
+              <FileText size={16} /> PDF
+            </button>
+          </CanAct>
+          <CanAct module="class-list" section="header" element="CSV button">
+            <button
+              onClick={exportCSV}
+              disabled={students.length === 0}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
+            >
+              <Download size={16} /> CSV
+            </button>
+          </CanAct>
         </div>
       </div>
 
       {/* Sélection de classe */}
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Select Class</label>
-          <select
-            value={selectedClass}
-            onChange={e => setSelectedClass(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[200px]"
-          >
-            <option value="">-- Choose a class --</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
+        <CanSee module="class-list" section="selector" element="Class select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Select Class</label>
+            <select
+              value={selectedClass}
+              onChange={e => setSelectedClass(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[200px]"
+            >
+              <option value="">-- Choose a class --</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </CanSee>
         {selectedClass && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 font-medium">
             Class: {selectedClassName()} | Pupils: {students.length}
@@ -160,32 +161,34 @@ export default function ClassListPage() {
             <p>No students found in this class.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">No.</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Full Name</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Gender</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Date of Birth</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Parent / Guardian</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Phone</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {students.map((student, idx) => (
-                  <tr key={student.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 text-gray-500">{idx + 1}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{student.last_name} {student.first_name}</td>
-                    <td className="px-4 py-3">{student.gender || '—'}</td>
-                    <td className="px-4 py-3">{student.date_of_birth ? new Date(student.date_of_birth).toLocaleDateString('en-GB') : '—'}</td>
-                    <td className="px-4 py-3">{student.parent_name || '—'}</td>
-                    <td className="px-4 py-3">{student.parent_phone || '—'}</td>
+          <CanSee module="class-list" section="table" element="Student list">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">No.</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Full Name</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Gender</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Date of Birth</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Parent / Guardian</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Phone</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {students.map((student, idx) => (
+                    <tr key={student.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 text-gray-500">{idx + 1}</td>
+                      <td className="px-4 py-3 font-medium text-gray-900">{student.last_name} {student.first_name}</td>
+                      <td className="px-4 py-3">{student.gender || '—'}</td>
+                      <td className="px-4 py-3">{student.date_of_birth ? new Date(student.date_of_birth).toLocaleDateString('en-GB') : '—'}</td>
+                      <td className="px-4 py-3">{student.parent_name || '—'}</td>
+                      <td className="px-4 py-3">{student.parent_phone || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CanSee>
         )}
       </div>
     </div>

@@ -1,7 +1,9 @@
+// src/App.jsx
 import React, { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { useAuthStore } from './stores/authStore'
+import ProtectedRoute from './components/ProtectedRoute'   // ← ajouté
 
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
@@ -23,7 +25,7 @@ import KgAssessmentPage from './pages/KgAssessmentPage'
 import MockExamsPage from './pages/MockExamsPage'
 import BeceTrackerPage from './pages/BeceTrackerPage'
 import PromotionPage from './pages/PromotionPage'
-import GesReportPage from './pages/GesReportPage'   // ← ajouté
+import GesReportPage from './pages/GesReportPage'
 import Layout from './components/Layout'
 
 function PrivateRoute({ children }) {
@@ -47,24 +49,24 @@ export default function App() {
         <Route path="/parent" element={<ParentPortalPage />} />
         <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
           <Route index element={<DashboardPage />} />
-          <Route path="students" element={<StudentsPage />} />
-          <Route path="fees" element={<FeesPage />} />
-          <Route path="expenses" element={<ExpensesPage />} />
-          <Route path="payroll" element={<PayrollPage />} />
-          <Route path="stock" element={<StockPage />} />
-          <Route path="audit" element={<AuditPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="class-list" element={<ClassListPage />} />
-          <Route path="timetable" element={<TimetablePage />} />
-          <Route path="attendance" element={<AttendancePage />} />
-          <Route path="behavior" element={<BehaviorPage />} />
-          <Route path="grades" element={<GradeEntryPage />} />
-          <Route path="report-cards" element={<ReportCardPage />} />
-          <Route path="kg-assessments" element={<KgAssessmentPage />} />
-          <Route path="mock-exams" element={<MockExamsPage />} />
-          <Route path="bece-tracker" element={<BeceTrackerPage />} />
-          <Route path="promotion" element={<PromotionPage />} />
-          <Route path="ges-report" element={<GesReportPage />} />   {/* ← ajouté */}
+          <Route path="students" element={<ProtectedRoute moduleName="students"><StudentsPage /></ProtectedRoute>} />
+          <Route path="fees" element={<ProtectedRoute moduleName="fees"><FeesPage /></ProtectedRoute>} />
+          <Route path="expenses" element={<ProtectedRoute moduleName="expenses"><ExpensesPage /></ProtectedRoute>} />
+          <Route path="payroll" element={<ProtectedRoute moduleName="payroll"><PayrollPage /></ProtectedRoute>} />
+          <Route path="stock" element={<ProtectedRoute moduleName="stock"><StockPage /></ProtectedRoute>} />
+          <Route path="audit" element={<ProtectedRoute moduleName="audit"><AuditPage /></ProtectedRoute>} />
+          <Route path="settings" element={<ProtectedRoute moduleName="settings"><SettingsPage /></ProtectedRoute>} />
+          <Route path="class-list" element={<ProtectedRoute moduleName="class-list"><ClassListPage /></ProtectedRoute>} />
+          <Route path="timetable" element={<ProtectedRoute moduleName="timetable"><TimetablePage /></ProtectedRoute>} />
+          <Route path="attendance" element={<ProtectedRoute moduleName="attendance"><AttendancePage /></ProtectedRoute>} />
+          <Route path="behavior" element={<ProtectedRoute moduleName="behavior"><BehaviorPage /></ProtectedRoute>} />
+          <Route path="grades" element={<ProtectedRoute moduleName="grades"><GradeEntryPage /></ProtectedRoute>} />
+          <Route path="report-cards" element={<ProtectedRoute moduleName="report-cards"><ReportCardPage /></ProtectedRoute>} />
+          <Route path="kg-assessments" element={<ProtectedRoute moduleName="kg-assessments"><KgAssessmentPage /></ProtectedRoute>} />
+          <Route path="mock-exams" element={<ProtectedRoute moduleName="mock-exams"><MockExamsPage /></ProtectedRoute>} />
+          <Route path="bece-tracker" element={<ProtectedRoute moduleName="bece-tracker"><BeceTrackerPage /></ProtectedRoute>} />
+          <Route path="promotion" element={<ProtectedRoute moduleName="promotion"><PromotionPage /></ProtectedRoute>} />
+          <Route path="ges-report" element={<ProtectedRoute moduleName="ges-report"><GesReportPage /></ProtectedRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>

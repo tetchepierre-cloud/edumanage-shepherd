@@ -1,6 +1,7 @@
 // src/pages/DashboardPage.jsx
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { CanSee } from '../components/PermissionGate'
 
 export default function DashboardPage() {
   const [stats, setStats] = useState({
@@ -32,14 +33,12 @@ export default function DashboardPage() {
       const currentMonth = now.getMonth() + 1
       const currentYear  = now.getFullYear()
 
-      // Active Students
       const { count: studentsCount, error: sError } = await supabase
         .from('students')
         .select('*', { count: 'exact', head: true })
         .eq('active', true)
       if (sError) console.error('students error:', sError)
 
-      // Fees du mois (par date de paiement ou à défaut par date de création)
       const { data: feesData, error: feesError } = await supabase
         .from('fee_payments')
         .select('amount, payment_date, created_at')
@@ -51,7 +50,6 @@ export default function DashboardPage() {
         return effectiveDate >= firstDay && effectiveDate <= lastDay
       }).reduce((sum, f) => sum + (parseFloat(f.amount) || 0), 0)
 
-      // Expenses du mois (par date de la dépense ou à défaut par date de création)
       const { data: expensesData, error: expError } = await supabase
         .from('expenses')
         .select('amount, created_at')
@@ -63,7 +61,6 @@ export default function DashboardPage() {
         (sum, e) => sum + (parseFloat(e.amount) || 0), 0
       )
 
-      // Payroll du mois (par mois/année)
       const { data: payrollData, error: payError } = await supabase
         .from('payroll')
         .select('net_salary')
@@ -75,7 +72,6 @@ export default function DashboardPage() {
         (sum, p) => sum + (parseFloat(p.net_salary) || 0), 0
       )
 
-      // Low Stock / Out of Stock
       const { data: stockData, error: stockError } = await supabase
         .from('stock_items')
         .select('quantity, minimum_stock')
@@ -85,7 +81,6 @@ export default function DashboardPage() {
       const lowStockCount = (stockData || []).filter(i => i.quantity > 0 && i.quantity <= i.minimum_stock).length
       const outOfStockCount = (stockData || []).filter(i => i.quantity <= 0).length
 
-      // Recent Payments (5 derniers par date de paiement)
       const { data: recentFeesRaw, error: rfError } = await supabase
         .from('fee_payments')
         .select(`id, amount, payment_type, payment_method, status, term, academic_year, payment_date, created_at, student_id, students (first_name, last_name)`)
@@ -102,7 +97,6 @@ export default function DashboardPage() {
       }))
       setRecentPayments(enrichedPayments)
 
-      // Recent Expenses (5 dernières par date de création)
       const { data: recentExpensesData, error: reError } = await supabase
         .from('expenses')
         .select('id, description, amount, category, created_at')
@@ -111,7 +105,6 @@ export default function DashboardPage() {
       if (reError) console.error('recent expenses error:', reError)
       setRecentExpenses(recentExpensesData || [])
 
-      // Set all stats
       setStats({
         totalStudents: studentsCount || 0,
         totalFees,
@@ -213,165 +206,172 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stat Cards ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-        {statCards.map((card) => (
-          <div
-            key={card.title}
-            className={`${card.bg} ${card.border} border rounded-xl p-4`}
-          >
-            <span className="text-2xl">{card.icon}</span>
-            <p className="text-gray-500 text-xs font-medium mt-2">{card.title}</p>
-            <p className={`${card.text} text-xl font-bold mt-1`}>{card.value}</p>
-            <p className="text-gray-400 text-xs mt-1">{card.sub}</p>
-          </div>
-        ))}
-      </div>
+      <CanSee module="dashboard" section="cards" element="Stats cards">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+          {statCards.map((card) => (
+            <div
+              key={card.title}
+              className={`${card.bg} ${card.border} border rounded-xl p-4`}
+            >
+              <span className="text-2xl">{card.icon}</span>
+              <p className="text-gray-500 text-xs font-medium mt-2">{card.title}</p>
+              <p className={`${card.text} text-xl font-bold mt-1`}>{card.value}</p>
+              <p className="text-gray-400 text-xs mt-1">{card.sub}</p>
+            </div>
+          ))}
+        </div>
+      </CanSee>
 
       {/* ── Recent Tables ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
         {/* Recent Payments */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="font-semibold text-gray-700">💰 Recent Payments</h2>
-            <span className="text-xs text-gray-400">
-              {recentPayments.length} record{recentPayments.length !== 1 ? 's' : ''}
-            </span>
-          </div>
-          <div className="p-4">
-            {recentPayments.length === 0 ? (
-              <p className="text-gray-400 text-sm text-center py-6">
-                No payments recorded yet
-              </p>
-            ) : (
-              <div className="space-y-1">
-                {recentPayments.map((payment) => (
-                  <div
-                    key={payment.id}
-                    className="flex items-center justify-between
-                               py-2.5 border-b border-gray-50 last:border-0"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-700 truncate">
-                        {payment.studentName}
-                      </p>
-                      <p className="text-xs text-gray-400">
-                        {payment.payment_type || 'Payment'}
-                        {payment.term && ` • ${payment.term}`}
-                        {' • '}
-                        {new Date(payment.payment_date || payment.created_at)
-                          .toLocaleDateString('en-GH')}
-                      </p>
+        <CanSee module="dashboard" section="table" element="Recent Payments">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-700">💰 Recent Payments</h2>
+              <span className="text-xs text-gray-400">
+                {recentPayments.length} record{recentPayments.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="p-4">
+              {recentPayments.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-6">
+                  No payments recorded yet
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {recentPayments.map((payment) => (
+                    <div
+                      key={payment.id}
+                      className="flex items-center justify-between
+                                 py-2.5 border-b border-gray-50 last:border-0"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-700 truncate">
+                          {payment.studentName}
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {payment.payment_type || 'Payment'}
+                          {payment.term && ` • ${payment.term}`}
+                          {' • '}
+                          {new Date(payment.payment_date || payment.created_at)
+                            .toLocaleDateString('en-GH')}
+                        </p>
+                      </div>
+                      <div className="text-right ml-3 shrink-0">
+                        <p className="text-green-600 font-semibold text-sm">
+                          {formatGHS(payment.amount)}
+                        </p>
+                        <p className="text-xs text-gray-400 capitalize">
+                          {payment.status}
+                        </p>
+                      </div>
                     </div>
-                    <div className="text-right ml-3 shrink-0">
-                      <p className="text-green-600 font-semibold text-sm">
-                        {formatGHS(payment.amount)}
-                      </p>
-                      <p className="text-xs text-gray-400 capitalize">
-                        {payment.status}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        </CanSee>
 
         {/* Recent Expenses */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="font-semibold text-gray-700">📋 Recent Expenses</h2>
-            <span className="text-xs text-gray-400">
-              {recentExpenses.length} record{recentExpenses.length !== 1 ? 's' : ''}
-            </span>
-          </div>
-          <div className="p-4">
-            {recentExpenses.length === 0 ? (
-              <p className="text-gray-400 text-sm text-center py-6">
-                No expenses recorded yet
-              </p>
-            ) : (
-              <div className="space-y-1">
-                {recentExpenses.map((expense) => (
-                  <div
-                    key={expense.id}
-                    className="flex items-center justify-between
-                               py-2.5 border-b border-gray-50 last:border-0"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-700 truncate">
-                        {expense.description}
-                      </p>
-                      <p className="text-xs text-gray-400 capitalize">
-                        {expense.category} •{' '}
-                        {new Date(expense.created_at)
-                          .toLocaleDateString('en-GH')}
-                      </p>
+        <CanSee module="dashboard" section="table" element="Recent Expenses">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-700">📋 Recent Expenses</h2>
+              <span className="text-xs text-gray-400">
+                {recentExpenses.length} record{recentExpenses.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="p-4">
+              {recentExpenses.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-6">
+                  No expenses recorded yet
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {recentExpenses.map((expense) => (
+                    <div
+                      key={expense.id}
+                      className="flex items-center justify-between
+                                 py-2.5 border-b border-gray-50 last:border-0"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-700 truncate">
+                          {expense.description}
+                        </p>
+                        <p className="text-xs text-gray-400 capitalize">
+                          {expense.category} •{' '}
+                          {new Date(expense.created_at)
+                            .toLocaleDateString('en-GH')}
+                        </p>
+                      </div>
+                      <span className="text-red-500 font-semibold text-sm ml-3 shrink-0">
+                        {formatGHS(expense.amount)}
+                      </span>
                     </div>
-                    <span className="text-red-500 font-semibold text-sm ml-3 shrink-0">
-                      {formatGHS(expense.amount)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        </CanSee>
 
       </div>
 
       {/* ── Net Balance ── */}
-      <div className={`rounded-xl p-5 border ${
-        netBalance >= 0
-          ? 'bg-green-50 border-green-200'
-          : 'bg-red-50 border-red-200'
-      }`}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-gray-600">Net Balance — this month</p>
-            <p className="text-xs text-gray-400 mt-0.5">
-              Fees − Expenses − Payroll
+      <CanSee module="dashboard" section="banner" element="Net Balance">
+        <div className={`rounded-xl p-5 border ${
+          netBalance >= 0
+            ? 'bg-green-50 border-green-200'
+            : 'bg-red-50 border-red-200'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Net Balance — this month</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Fees − Expenses − Payroll
+              </p>
+            </div>
+            <p className={`text-2xl font-bold ${
+              netBalance >= 0 ? 'text-green-700' : 'text-red-700'
+            }`}>
+              {formatGHS(netBalance)}
             </p>
           </div>
-          <p className={`text-2xl font-bold ${
-            netBalance >= 0 ? 'text-green-700' : 'text-red-700'
-          }`}>
-            {formatGHS(netBalance)}
-          </p>
         </div>
-      </div>
+      </CanSee>
 
       {/* ── Out of Stock Alert ── */}
       {stats.outOfStockItems > 0 && (
-        <div className="bg-red-50 border border-red-200
-                        rounded-xl p-4 flex items-center gap-3">
-          <span className="text-2xl">🚨</span>
-          <div>
-            <p className="font-semibold text-red-700">Out of Stock Alert</p>
-            <p className="text-red-600 text-sm">
-              {stats.outOfStockItems} item(s) completely out of stock.
-              Please restock immediately.
-            </p>
+        <CanSee module="dashboard" section="alerts" element="Low Stock Alerts">
+          <div className="bg-red-50 border border-red-200
+                          rounded-xl p-4 flex items-center gap-3">
+            <span className="text-2xl">🚨</span>
+            <div>
+              <p className="font-semibold text-red-700">Out of Stock Alert</p>
+              <p className="text-red-600 text-sm">
+                {stats.outOfStockItems} item(s) completely out of stock.
+                Please restock immediately.
+              </p>
+            </div>
           </div>
-        </div>
+          {stats.lowStockItems > 0 && (
+            <div className="bg-orange-50 border border-orange-200
+                            rounded-xl p-4 flex items-center gap-3 mt-3">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <p className="font-semibold text-orange-700">Low Stock Alert</p>
+                <p className="text-orange-600 text-sm">
+                  {stats.lowStockItems} item(s) below minimum stock level.
+                  Please check the Stock page.
+                </p>
+              </div>
+            </div>
+          )}
+        </CanSee>
       )}
-
-      {/* ── Low Stock Alert ── */}
-      {stats.lowStockItems > 0 && (
-        <div className="bg-orange-50 border border-orange-200
-                        rounded-xl p-4 flex items-center gap-3">
-          <span className="text-2xl">⚠️</span>
-          <div>
-            <p className="font-semibold text-orange-700">Low Stock Alert</p>
-            <p className="text-orange-600 text-sm">
-              {stats.lowStockItems} item(s) below minimum stock level.
-              Please check the Stock page.
-            </p>
-          </div>
-        </div>
-      )}
-
     </div>
   )
 }

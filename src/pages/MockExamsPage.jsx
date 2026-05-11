@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Plus, Eye, Save } from 'lucide-react';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 const MOCK_NAMES = ['Mock 1', 'Mock 2', 'Mock 3'];
 const ACADEMIC_YEARS = ['2024/2025', '2025/2026', '2026/2027'];
@@ -14,7 +15,7 @@ export default function MockExamsPage() {
   const [selectedClass, setSelectedClass] = useState('');
   const [classSubjects, setClassSubjects] = useState([]);
   const [students, setStudents] = useState([]);
-  const [scores, setScores] = useState({}); // { [studentId]: score }
+  const [scores, setScores] = useState({});
   const [existingScores, setExistingScores] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -54,7 +55,6 @@ export default function MockExamsPage() {
     }
   };
 
-  // Quand la classe et le mock sont choisis, on charge les matières JHS
   useEffect(() => {
     if (!selectedClass || !selectedMock) return;
     const mock = mocks.find(m => m.id === selectedMock);
@@ -82,7 +82,6 @@ export default function MockExamsPage() {
       .then(({ data }) => setStudents(data || []));
   }, [selectedClass, selectedMock]);
 
-  // Charger les notes existantes pour la matière et le mock sélectionnés
   useEffect(() => {
     if (!selectedSubject || !selectedMock || students.length === 0) {
       setExistingScores({});
@@ -102,7 +101,7 @@ export default function MockExamsPage() {
         const map = {};
         (data || []).forEach(r => { map[r.student_id] = r.score; });
         setExistingScores(map);
-        setScores(map); // pré-remplit pour modification
+        setScores(map);
         setLoading(false);
       });
   }, [selectedSubject, selectedMock, students]);
@@ -155,9 +154,11 @@ export default function MockExamsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Mock Exams (BECE Preparation)</h1>
           <p className="text-gray-500 text-sm mt-1">Manage mock exams and track student performance for JHS classes</p>
         </div>
-        <button onClick={() => setShowCreateMock(true)} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">
-          <Plus size={16} /> New Mock Exam
-        </button>
+        <CanAct module="mock-exams" section="header" element="New Mock Exam button">
+          <button onClick={() => setShowCreateMock(true)} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">
+            <Plus size={16} /> New Mock Exam
+          </button>
+        </CanAct>
       </div>
 
       {message && (
@@ -166,29 +167,37 @@ export default function MockExamsPage() {
 
       {/* Filtres */}
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Mock Session</label>
-          <select value={selectedMock} onChange={e => setSelectedMock(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
-            {mocks.map(m => <option key={m.id} value={m.id}>{m.name} ({m.academic_year})</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
-          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
-            <option value="">-- Select JHS Class --</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
-          <select value={selectedSubject} onChange={e => setSelectedSubject(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
-            <option value="">-- Select Subject --</option>
-            {classSubjects.map(cs => <option key={cs.id} value={cs.id}>{cs.subjects?.name}</option>)}
-          </select>
-        </div>
-        <button onClick={handleSaveScores} disabled={saving} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
-          <Save size={16} /> {saving ? 'Saving...' : 'Save Scores'}
-        </button>
+        <CanSee module="mock-exams" section="selectors" element="Mock select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Mock Session</label>
+            <select value={selectedMock} onChange={e => setSelectedMock(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
+              {mocks.map(m => <option key={m.id} value={m.id}>{m.name} ({m.academic_year})</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="mock-exams" section="selectors" element="Class select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
+            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
+              <option value="">-- Select JHS Class --</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="mock-exams" section="selectors" element="Subject select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
+            <select value={selectedSubject} onChange={e => setSelectedSubject(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
+              <option value="">-- Select Subject --</option>
+              {classSubjects.map(cs => <option key={cs.id} value={cs.id}>{cs.subjects?.name}</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanAct module="mock-exams" section="buttons" element="Save Scores">
+          <button onClick={handleSaveScores} disabled={saving} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
+            <Save size={16} /> {saving ? 'Saving...' : 'Save Scores'}
+          </button>
+        </CanAct>
       </div>
 
       {/* Tableau de saisie */}
@@ -216,15 +225,17 @@ export default function MockExamsPage() {
                     <td className="px-4 py-2 text-gray-500">{idx + 1}</td>
                     <td className="px-4 py-2 font-medium">{s.last_name} {s.first_name}</td>
                     <td className="px-4 py-2 text-center">
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.01"
-                        value={scores[s.id] !== undefined ? scores[s.id] : ''}
-                        onChange={e => handleScoreChange(s.id, e.target.value)}
-                        className="w-20 text-center border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-                      />
+                      <CanAct module="mock-exams" section="table" element="Score fields">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={scores[s.id] !== undefined ? scores[s.id] : ''}
+                          onChange={e => handleScoreChange(s.id, e.target.value)}
+                          className="w-20 text-center border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                        />
+                      </CanAct>
                     </td>
                   </tr>
                 ))}

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { logAction } from '../lib/audit'
+import { CanAct, CanSee } from '../components/PermissionGate'
 
 const ROLES = [
   'Teacher', 'Administrator', 'Security',
@@ -50,8 +51,6 @@ export default function PayrollPage() {
     fetchStaff()
   }, [])
 
-  // ── Fetch helpers ─────────────────────────────────────────────────────────────
-
   const fetchPayroll = async () => {
     setLoading(true)
     const { data, error } = await supabase
@@ -72,8 +71,6 @@ export default function PayrollPage() {
       .order('first_name')
     setStaffList(data || [])
   }
-
-  // ── Staff auto-fill ───────────────────────────────────────────────────────────
 
   const handleStaffSelect = (e) => {
     const selectedId = e.target.value
@@ -102,8 +99,6 @@ export default function PayrollPage() {
       base_salary:   staff.base_salary || '',
     }))
   }
-
-  // ── Form helpers ──────────────────────────────────────────────────────────────
 
   const openAddForm = () => {
     setEditItem(null)
@@ -137,8 +132,6 @@ export default function PayrollPage() {
     setShowForm(true)
   }
 
-  // ── CRUD ──────────────────────────────────────────────────────────────────────
-
   const handleSave = async (e) => {
     e.preventDefault()
     setSaving(true)
@@ -167,9 +160,7 @@ export default function PayrollPage() {
       }
 
       if (editItem) {
-        // ── Sauvegarder l'ancienne donnée AVANT modification ──────────────────
         const oldItem = payroll.find(p => p.id === editItem.id)
-
         const { data, error } = await supabase
           .from('payroll')
           .update(payload)
@@ -179,7 +170,6 @@ export default function PayrollPage() {
 
         if (error) throw error
 
-        // ── Audit log UPDATE ──────────────────────────────────────────────────
         await logAction({
           action:      'UPDATE',
           tableName:   'payroll',
@@ -202,7 +192,6 @@ export default function PayrollPage() {
 
         if (error) throw error
 
-        // ── Audit log CREATE ──────────────────────────────────────────────────
         await logAction({
           action:      'CREATE',
           tableName:   'payroll',
@@ -230,7 +219,6 @@ export default function PayrollPage() {
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this payroll record?')) return
 
-    // ── Sauvegarder les données AVANT suppression ─────────────────────────────
     const itemToDelete = payroll.find(p => p.id === id)
 
     const { error } = await supabase
@@ -239,7 +227,6 @@ export default function PayrollPage() {
       .eq('id', id)
 
     if (!error) {
-      // ── Audit log DELETE ──────────────────────────────────────────────────
       await logAction({
         action:      'DELETE',
         tableName:   'payroll',
@@ -258,8 +245,6 @@ export default function PayrollPage() {
     }
   }
 
-  // ── Utilities ─────────────────────────────────────────────────────────────────
-
   const formatGHS = (amount) =>
     new Intl.NumberFormat('en-GH', {
       style:    'currency',
@@ -275,8 +260,6 @@ export default function PayrollPage() {
     return styles[status] || 'bg-gray-100 text-gray-600'
   }
 
-  // ── Stats ─────────────────────────────────────────────────────────────────────
-
   const totalMasse = payroll
     .reduce((sum, p) => sum + (parseFloat(p.net_salary) || 0), 0)
 
@@ -287,8 +270,6 @@ export default function PayrollPage() {
 
   const pendingCount = payroll.filter(p => p.status === 'pending').length
 
-  // ── Filtered list ─────────────────────────────────────────────────────────────
-
   const filtered = payroll.filter(p => {
     const matchSearch = p.employee_name?.toLowerCase().includes(search.toLowerCase())
     const matchMonth  = filterMonth  ? p.month  === parseInt(filterMonth) : true
@@ -297,14 +278,10 @@ export default function PayrollPage() {
     return matchSearch && matchMonth && matchRole && matchStatus
   })
 
-  // ── Net preview (form) ────────────────────────────────────────────────────────
-
   const netPreview =
     (parseFloat(form.base_salary) || 0)
     + (parseFloat(form.bonuses)   || 0)
     - (parseFloat(form.deductions)|| 0)
-
-  // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6 p-6">
@@ -315,13 +292,15 @@ export default function PayrollPage() {
           <h2 className="text-2xl font-bold text-gray-900">Payroll</h2>
           <p className="text-gray-500 text-sm">{payroll.length} payroll records</p>
         </div>
-        <button
-          onClick={openAddForm}
-          className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2
-                     rounded-lg font-medium transition-colors flex items-center gap-2"
-        >
-          ➕ Add Payroll
-        </button>
+        <CanAct module="payroll" section="header" element="Add Payroll button">
+          <button
+            onClick={openAddForm}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2
+                       rounded-lg font-medium transition-colors flex items-center gap-2"
+          >
+            ➕ Add Payroll
+          </button>
+        </CanAct>
       </div>
 
       {/* ── Message global ── */}
@@ -369,48 +348,56 @@ export default function PayrollPage() {
 
       {/* ── Filters ── */}
       <div className="bg-white rounded-xl shadow-sm p-4 flex flex-wrap gap-3">
-        <input
-          type="text"
-          placeholder="🔍 Search employee..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="flex-1 min-w-48 px-4 py-2 border border-gray-300
-                     rounded-lg focus:ring-2 focus:ring-purple-500
-                     outline-none text-sm"
-        />
-        <select
-          value={filterMonth}
-          onChange={e => setFilterMonth(e.target.value)}
-          className="px-4 py-2 border border-gray-300 rounded-lg
-                     focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-        >
-          <option value="">All Months</option>
-          {MONTHS.map((m, i) => (
-            <option key={m} value={i + 1}>{m}</option>
-          ))}
-        </select>
-        <select
-          value={filterRole}
-          onChange={e => setFilterRole(e.target.value)}
-          className="px-4 py-2 border border-gray-300 rounded-lg
-                     focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-        >
-          <option value="">All Roles</option>
-          {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <select
-          value={filterStatus}
-          onChange={e => setFilterStatus(e.target.value)}
-          className="px-4 py-2 border border-gray-300 rounded-lg
-                     focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-        >
-          <option value="">All Status</option>
-          {STATUS_OPTIONS.map(s => (
-            <option key={s} value={s}>
-              {s.charAt(0).toUpperCase() + s.slice(1)}
-            </option>
-          ))}
-        </select>
+        <CanSee module="payroll" section="filters" element="Search field">
+          <input
+            type="text"
+            placeholder="🔍 Search employee..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="flex-1 min-w-48 px-4 py-2 border border-gray-300
+                       rounded-lg focus:ring-2 focus:ring-purple-500
+                       outline-none text-sm"
+          />
+        </CanSee>
+        <CanSee module="payroll" section="filters" element="Month select">
+          <select
+            value={filterMonth}
+            onChange={e => setFilterMonth(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg
+                       focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+          >
+            <option value="">All Months</option>
+            {MONTHS.map((m, i) => (
+              <option key={m} value={i + 1}>{m}</option>
+            ))}
+          </select>
+        </CanSee>
+        <CanSee module="payroll" section="filters" element="Role select">
+          <select
+            value={filterRole}
+            onChange={e => setFilterRole(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg
+                       focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+          >
+            <option value="">All Roles</option>
+            {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </CanSee>
+        <CanSee module="payroll" section="filters" element="Status select">
+          <select
+            value={filterStatus}
+            onChange={e => setFilterStatus(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg
+                       focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+          >
+            <option value="">All Status</option>
+            {STATUS_OPTIONS.map(s => (
+              <option key={s} value={s}>
+                {s.charAt(0).toUpperCase() + s.slice(1)}
+              </option>
+            ))}
+          </select>
+        </CanSee>
         <button
           onClick={() => {
             setSearch('')
@@ -439,89 +426,95 @@ export default function PayrollPage() {
             <p className="text-gray-500">No payroll records found</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b">
-                <tr className="text-left text-xs font-medium
-                               text-gray-500 uppercase tracking-wide">
-                  <th className="px-6 py-4">Employee</th>
-                  <th className="px-6 py-4">Role</th>
-                  <th className="px-6 py-4">Period</th>
-                  <th className="px-6 py-4">Base</th>
-                  <th className="px-6 py-4">Bonuses</th>
-                  <th className="px-6 py-4">Deductions</th>
-                  <th className="px-6 py-4">Net Salary</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Method</th>
-                  <th className="px-6 py-4">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filtered.map(item => (
-                  <tr
-                    key={item.id}
-                    className="hover:bg-gray-50 transition-colors"
-                  >
-                    <td className="px-6 py-4 font-medium text-gray-900">
-                      {item.employee_name}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="inline-flex px-2 py-1 text-xs
-                                       font-medium rounded-full
-                                       bg-purple-100 text-purple-700">
-                        {item.role}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {MONTHS[(item.month || 1) - 1]} {item.year}
-                    </td>
-                    <td className="px-6 py-4 text-gray-700">
-                      {formatGHS(item.base_salary)}
-                    </td>
-                    <td className="px-6 py-4 text-green-600">
-                      +{formatGHS(item.bonuses)}
-                    </td>
-                    <td className="px-6 py-4 text-red-500">
-                      -{formatGHS(item.deductions)}
-                    </td>
-                    <td className="px-6 py-4 font-bold text-purple-700">
-                      {formatGHS(item.net_salary)}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex px-2 py-1 text-xs
-                                        font-medium rounded-full capitalize
-                                        ${getStatusBadge(item.status)}`}>
-                        {item.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-gray-600 capitalize">
-                      {item.payment_method}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => openEditForm(item)}
-                          className="text-blue-600 hover:text-blue-800
-                                     text-sm font-medium px-2 py-1 rounded
-                                     hover:bg-blue-50"
-                        >
-                          ✏️ Edit
-                        </button>
-                        <button
-                          onClick={() => handleDelete(item.id)}
-                          className="text-red-500 hover:text-red-700
-                                     text-sm font-medium px-2 py-1 rounded
-                                     hover:bg-red-50"
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    </td>
+          <CanSee module="payroll" section="table" element="Payroll rows">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b">
+                  <tr className="text-left text-xs font-medium
+                                 text-gray-500 uppercase tracking-wide">
+                    <th className="px-6 py-4">Employee</th>
+                    <th className="px-6 py-4">Role</th>
+                    <th className="px-6 py-4">Period</th>
+                    <th className="px-6 py-4">Base</th>
+                    <th className="px-6 py-4">Bonuses</th>
+                    <th className="px-6 py-4">Deductions</th>
+                    <th className="px-6 py-4">Net Salary</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Method</th>
+                    <th className="px-6 py-4">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filtered.map(item => (
+                    <tr
+                      key={item.id}
+                      className="hover:bg-gray-50 transition-colors"
+                    >
+                      <td className="px-6 py-4 font-medium text-gray-900">
+                        {item.employee_name}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex px-2 py-1 text-xs
+                                         font-medium rounded-full
+                                         bg-purple-100 text-purple-700">
+                          {item.role}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-gray-600">
+                        {MONTHS[(item.month || 1) - 1]} {item.year}
+                      </td>
+                      <td className="px-6 py-4 text-gray-700">
+                        {formatGHS(item.base_salary)}
+                      </td>
+                      <td className="px-6 py-4 text-green-600">
+                        +{formatGHS(item.bonuses)}
+                      </td>
+                      <td className="px-6 py-4 text-red-500">
+                        -{formatGHS(item.deductions)}
+                      </td>
+                      <td className="px-6 py-4 font-bold text-purple-700">
+                        {formatGHS(item.net_salary)}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex px-2 py-1 text-xs
+                                          font-medium rounded-full capitalize
+                                          ${getStatusBadge(item.status)}`}>
+                          {item.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-gray-600 capitalize">
+                        {item.payment_method}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex gap-2">
+                          <CanAct module="payroll" section="table" element="Edit button">
+                            <button
+                              onClick={() => openEditForm(item)}
+                              className="text-blue-600 hover:text-blue-800
+                                         text-sm font-medium px-2 py-1 rounded
+                                         hover:bg-blue-50"
+                            >
+                              ✏️ Edit
+                            </button>
+                          </CanAct>
+                          <CanAct module="payroll" section="table" element="Delete button">
+                            <button
+                              onClick={() => handleDelete(item.id)}
+                              className="text-red-500 hover:text-red-700
+                                         text-sm font-medium px-2 py-1 rounded
+                                         hover:bg-red-50"
+                            >
+                              🗑️
+                            </button>
+                          </CanAct>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CanSee>
         )}
       </div>
 
@@ -532,7 +525,6 @@ export default function PayrollPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full
                           max-w-lg max-h-[90vh] overflow-y-auto">
 
-            {/* Header */}
             <div className="p-6 border-b flex items-center justify-between
                             sticky top-0 bg-white z-10">
               <h3 className="text-lg font-semibold text-gray-900">
@@ -546,285 +538,270 @@ export default function PayrollPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSave} className="p-6 space-y-4">
+            <CanAct module="payroll" section="modal" element="Payroll form">
+              <form onSubmit={handleSave} className="p-6 space-y-4">
+                {/* Staff selector — ajout uniquement */}
+                {!editItem && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Select Staff Member
+                      </label>
+                      <select
+                        onChange={handleStaffSelect}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                   focus:ring-2 focus:ring-purple-500 outline-none
+                                   text-sm bg-purple-50"
+                      >
+                        <option value="">-- Choose from staff list --</option>
+                        {staffList.map(s => (
+                          <option key={s.id} value={s.id}>
+                            {s.first_name} {s.last_name} — {s.position}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-400 mt-1">
+                        ℹ️ Auto-fills fields below
+                      </p>
+                    </div>
+                    <div className="border-t border-dashed border-gray-200 pt-2 text-center">
+                      <p className="text-xs text-gray-400">— or fill manually —</p>
+                    </div>
+                  </>
+                )}
 
-              {/* Staff selector — ajout uniquement */}
-              {!editItem && (
-                <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Employee Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={form.employee_name}
+                      onChange={e => setForm(f => ({ ...f, employee_name: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                      placeholder="e.g. Kofi Mensah"
+                    />
+                  </div>
+
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Select Staff Member
+                      Role *
                     </label>
                     <select
-                      onChange={handleStaffSelect}
+                      required
+                      value={form.role}
+                      onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                                 focus:ring-2 focus:ring-purple-500 outline-none
-                                 text-sm bg-purple-50"
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
                     >
-                      <option value="">-- Choose from staff list --</option>
-                      {staffList.map(s => (
-                        <option key={s.id} value={s.id}>
-                          {s.first_name} {s.last_name} — {s.position}
+                      <option value="">Select role</option>
+                      {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Status *
+                    </label>
+                    <select
+                      required
+                      value={form.status}
+                      onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                    >
+                      {STATUS_OPTIONS.map(s => (
+                        <option key={s} value={s}>
+                          {s.charAt(0).toUpperCase() + s.slice(1)}
                         </option>
                       ))}
                     </select>
-                    <p className="text-xs text-gray-400 mt-1">
-                      ℹ️ Auto-fills fields below
-                    </p>
                   </div>
-                  <div className="border-t border-dashed border-gray-200 pt-2 text-center">
-                    <p className="text-xs text-gray-400">— or fill manually —</p>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Base Salary (GHS) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      step="0.01"
+                      value={form.base_salary}
+                      onChange={e => setForm(f => ({ ...f, base_salary: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                      placeholder="0.00"
+                    />
                   </div>
-                </>
-              )}
 
-              <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Bonuses (GHS)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.bonuses}
+                      onChange={e => setForm(f => ({ ...f, bonuses: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                    />
+                  </div>
 
-                {/* Employee Name */}
-                <div className="col-span-2">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Deductions (GHS)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.deductions}
+                      onChange={e => setForm(f => ({ ...f, deductions: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Month *
+                    </label>
+                    <select
+                      required
+                      value={form.month}
+                      onChange={e => setForm(f => ({ ...f, month: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                    >
+                      <option value="">Select month</option>
+                      {MONTHS.map((m, i) => (
+                        <option key={m} value={i + 1}>{m}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Year *
+                    </label>
+                    <select
+                      required
+                      value={form.year}
+                      onChange={e => setForm(f => ({ ...f, year: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                    >
+                      <option value="">Select year</option>
+                      {years.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Payment Date
+                    </label>
+                    <input
+                      type="date"
+                      value={form.payment_date}
+                      onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Payment Method
+                    </label>
+                    <select
+                      value={form.payment_method}
+                      onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg
+                                 focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="bank">Bank Transfer</option>
+                      <option value="momo">Mobile Money</option>
+                      <option value="cheque">Cheque</option>
+                    </select>
+                  </div>
+
+                </div>
+
+                <div className="bg-purple-50 rounded-lg p-4 text-center">
+                  <p className="text-xs text-purple-600 font-medium uppercase tracking-wide">
+                    Net Salary Preview
+                  </p>
+                  <p className="text-2xl font-bold text-purple-700 mt-1">
+                    {formatGHS(netPreview)}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {formatGHS(parseFloat(form.base_salary) || 0)} base
+                    {' '}+ {formatGHS(parseFloat(form.bonuses) || 0)} bonus
+                    {' '}- {formatGHS(parseFloat(form.deductions) || 0)} deductions
+                  </p>
+                </div>
+
+                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Employee Name *
+                    Notes
                   </label>
-                  <input
-                    type="text"
-                    required
-                    value={form.employee_name}
-                    onChange={e => setForm(f => ({ ...f, employee_name: e.target.value }))}
+                  <textarea
+                    value={form.notes}
+                    onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                    rows={2}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg
                                focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                    placeholder="e.g. Kofi Mensah"
+                    placeholder="Optional notes..."
                   />
                 </div>
 
-                {/* Role */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Role *
-                  </label>
-                  <select
-                    required
-                    value={form.role}
-                    onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                {message && (
+                  <div className={`px-4 py-3 rounded-lg text-sm ${
+                    message.includes('❌')
+                      ? 'bg-red-50 text-red-600'
+                      : 'bg-green-50 text-green-600'
+                  }`}>
+                    {message}
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white
+                               font-medium py-2 rounded-lg transition-colors
+                               disabled:opacity-50 flex items-center
+                               justify-center gap-2"
                   >
-                    <option value="">Select role</option>
-                    {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                </div>
-
-                {/* Status */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Status *
-                  </label>
-                  <select
-                    required
-                    value={form.status}
-                    onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
+                    {saving ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4
+                                        border-b-2 border-white" />
+                        Saving...
+                      </>
+                    ) : (
+                      editItem ? '✅ Update Record' : '✅ Add Record'
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowForm(false)}
+                    className="px-6 py-2 border border-gray-300 text-gray-700
+                               rounded-lg hover:bg-gray-50 transition-colors"
                   >
-                    {STATUS_OPTIONS.map(s => (
-                      <option key={s} value={s}>
-                        {s.charAt(0).toUpperCase() + s.slice(1)}
-                      </option>
-                    ))}
-                  </select>
+                    Cancel
+                  </button>
                 </div>
-
-                {/* Base Salary */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Base Salary (GHS) *
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    min="0"
-                    step="0.01"
-                    value={form.base_salary}
-                    onChange={e => setForm(f => ({ ...f, base_salary: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                    placeholder="0.00"
-                  />
-                </div>
-
-                {/* Bonuses */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Bonuses (GHS)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.bonuses}
-                    onChange={e => setForm(f => ({ ...f, bonuses: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                  />
-                </div>
-
-                {/* Deductions */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Deductions (GHS)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.deductions}
-                    onChange={e => setForm(f => ({ ...f, deductions: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                  />
-                </div>
-
-                {/* Month */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Month *
-                  </label>
-                  <select
-                    required
-                    value={form.month}
-                    onChange={e => setForm(f => ({ ...f, month: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                  >
-                    <option value="">Select month</option>
-                    {MONTHS.map((m, i) => (
-                      <option key={m} value={i + 1}>{m}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Year */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Year *
-                  </label>
-                  <select
-                    required
-                    value={form.year}
-                    onChange={e => setForm(f => ({ ...f, year: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                  >
-                    <option value="">Select year</option>
-                    {years.map(y => <option key={y} value={y}>{y}</option>)}
-                  </select>
-                </div>
-
-                {/* Payment Date */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Payment Date
-                  </label>
-                  <input
-                    type="date"
-                    value={form.payment_date}
-                    onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                  />
-                </div>
-
-                {/* Payment Method */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Payment Method
-                  </label>
-                  <select
-                    value={form.payment_method}
-                    onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                               focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                  >
-                    <option value="cash">Cash</option>
-                    <option value="bank">Bank Transfer</option>
-                    <option value="momo">Mobile Money</option>
-                    <option value="cheque">Cheque</option>
-                  </select>
-                </div>
-
-              </div>
-
-              {/* ── Net Salary Preview ── */}
-              <div className="bg-purple-50 rounded-lg p-4 text-center">
-                <p className="text-xs text-purple-600 font-medium uppercase tracking-wide">
-                  Net Salary Preview
-                </p>
-                <p className="text-2xl font-bold text-purple-700 mt-1">
-                  {formatGHS(netPreview)}
-                </p>
-                <p className="text-xs text-gray-400 mt-1">
-                  {formatGHS(parseFloat(form.base_salary) || 0)} base
-                  {' '}+ {formatGHS(parseFloat(form.bonuses) || 0)} bonus
-                  {' '}- {formatGHS(parseFloat(form.deductions) || 0)} deductions
-                </p>
-              </div>
-
-              {/* Notes */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Notes
-                </label>
-                <textarea
-                  value={form.notes}
-                  onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-                  rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg
-                             focus:ring-2 focus:ring-purple-500 outline-none text-sm"
-                  placeholder="Optional notes..."
-                />
-              </div>
-
-              {/* Message dans le modal */}
-              {message && (
-                <div className={`px-4 py-3 rounded-lg text-sm ${
-                  message.includes('❌')
-                    ? 'bg-red-50 text-red-600'
-                    : 'bg-green-50 text-green-600'
-                }`}>
-                  {message}
-                </div>
-              )}
-
-              {/* Buttons */}
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white
-                             font-medium py-2 rounded-lg transition-colors
-                             disabled:opacity-50 flex items-center
-                             justify-center gap-2"
-                >
-                  {saving ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4
-                                      border-b-2 border-white" />
-                      Saving...
-                    </>
-                  ) : (
-                    editItem ? '✅ Update Record' : '✅ Add Record'
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                  className="px-6 py-2 border border-gray-300 text-gray-700
-                             rounded-lg hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-
-            </form>
+              </form>
+            </CanAct>
           </div>
         </div>
       )}

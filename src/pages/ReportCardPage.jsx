@@ -5,6 +5,7 @@ import { computeTermReport } from '../lib/gradeCalculations';
 import { generateReportCard } from '../lib/reportCardGenerator';
 import { generateKgReportCard } from '../lib/kgReportCardGenerator';
 import { Printer } from 'lucide-react';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 const RUBRIC_LABELS = { 'E': 'Emerging', 'D': 'Developing', 'A': 'Achieving', 'Ex': 'Extending' };
 const RUBRIC_COLORS = {
@@ -147,35 +148,45 @@ export default function ReportCardPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Terminal Reports</h1>     {/* ← modifié */}
-      <p className="text-gray-500 text-sm -mt-4">Compute term averages and generate terminal reports</p>  {/* ← modifié */}
+      <h1 className="text-2xl font-bold text-gray-900">Terminal Reports</h1>
+      <p className="text-gray-500 text-sm -mt-4">Compute term averages and generate terminal reports</p>
 
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Term</label>
-          <select value={selectedTerm} onChange={e => setSelectedTerm(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
-            <option value="">-- Select Term --</option>
-            {terms.map(t => <option key={t.id} value={t.id}>{t.name} ({t.academic_year})</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
-          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
-            <option value="">-- Select Class --</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Student</label>
-          <select value={selectedStudent} onChange={e => setSelectedStudent(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
-            <option value="">-- Select Student --</option>
-            {students.map(s => <option key={s.id} value={s.id}>{s.last_name} {s.first_name}</option>)}
-          </select>
-        </div>
-        <button onClick={handleCompute} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Compute</button>
-        <button onClick={handlePrint} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
-          <Printer size={16} /> Print Terminal Report
-        </button>
+        <CanSee module="report-cards" section="header" element="Term select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Term</label>
+            <select value={selectedTerm} onChange={e => setSelectedTerm(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
+              <option value="">-- Select Term --</option>
+              {terms.map(t => <option key={t.id} value={t.id}>{t.name} ({t.academic_year})</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="report-cards" section="header" element="Class select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
+            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[180px]">
+              <option value="">-- Select Class --</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="report-cards" section="header" element="Student select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Student</label>
+            <select value={selectedStudent} onChange={e => setSelectedStudent(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
+              <option value="">-- Select Student --</option>
+              {students.map(s => <option key={s.id} value={s.id}>{s.last_name} {s.first_name}</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanAct module="report-cards" section="header" element="Compute button">
+          <button onClick={handleCompute} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Compute</button>
+        </CanAct>
+        <CanAct module="report-cards" section="header" element="Print Terminal Report">
+          <button onClick={handlePrint} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
+            <Printer size={16} /> Print Terminal Report
+          </button>
+        </CanAct>
       </div>
 
       {loading && <div className="text-center py-4 text-gray-500">Computing...</div>}
@@ -229,51 +240,53 @@ export default function ReportCardPage() {
         </div>
       )}
 
-      {/* Prévisualisation Primary/JHS (inchangée) */}
+      {/* Prévisualisation Primary/JHS */}
       {report && !isKgClass() && (
-        <div className="bg-white rounded-xl shadow overflow-hidden">
-          <div className="px-6 py-4 border-b flex justify-between items-center">
-            <h2 className="font-semibold">
-              {students.find(s => s.id === selectedStudent)?.last_name} {students.find(s => s.id === selectedStudent)?.first_name}
-            </h2>
-          </div>
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="text-left px-4 py-3">Subject</th>
-                <th className="text-center px-4 py-3">Mid-Term</th>
-                <th className="text-center px-4 py-3">End-Term</th>
-                <th className="text-center px-4 py-3">Average</th>
-                <th className="text-center px-4 py-3">Grade</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {report.subjects?.map((sub, idx) => (
-                <tr key={idx}>
-                  <td className="px-4 py-2">{sub.subjectName}</td>
-                  <td className="px-4 py-2 text-center">{sub.midTermScore ?? '—'}</td>
-                  <td className="px-4 py-2 text-center">{sub.endTermScore ?? '—'}</td>
-                  <td className="px-4 py-2 text-center font-medium">{sub.average !== null ? sub.average.toFixed(1) : '—'}</td>
-                  <td className="px-4 py-2 text-center">{sub.average !== null ? getGrade(sub.average) : '—'}</td>
+        <CanSee module="report-cards" section="preview" element="Grades table">
+          <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="px-6 py-4 border-b flex justify-between items-center">
+              <h2 className="font-semibold">
+                {students.find(s => s.id === selectedStudent)?.last_name} {students.find(s => s.id === selectedStudent)?.first_name}
+              </h2>
+            </div>
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="text-left px-4 py-3">Subject</th>
+                  <th className="text-center px-4 py-3">Mid-Term</th>
+                  <th className="text-center px-4 py-3">End-Term</th>
+                  <th className="text-center px-4 py-3">Average</th>
+                  <th className="text-center px-4 py-3">Grade</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot className="bg-gray-50 font-semibold">
-              <tr>
-                <td colSpan={4} className="px-4 py-2 text-right">Overall Average</td>
-                <td className="px-4 py-2 text-center">{report.overallAverage !== null ? report.overallAverage.toFixed(2) + '%' : 'N/A'}</td>
-              </tr>
-              <tr>
-                <td colSpan={4} className="px-4 py-2 text-right">Grade</td>
-                <td className="px-4 py-2 text-center">{report.grade || 'N/A'}</td>
-              </tr>
-              <tr>
-                <td colSpan={4} className="px-4 py-2 text-right">Rank</td>
-                <td className="px-4 py-2 text-center">{report.rank ?? 'N/A'}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y">
+                {report.subjects?.map((sub, idx) => (
+                  <tr key={idx}>
+                    <td className="px-4 py-2">{sub.subjectName}</td>
+                    <td className="px-4 py-2 text-center">{sub.midTermScore ?? '—'}</td>
+                    <td className="px-4 py-2 text-center">{sub.endTermScore ?? '—'}</td>
+                    <td className="px-4 py-2 text-center font-medium">{sub.average !== null ? sub.average.toFixed(1) : '—'}</td>
+                    <td className="px-4 py-2 text-center">{sub.average !== null ? getGrade(sub.average) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-gray-50 font-semibold">
+                <tr>
+                  <td colSpan={4} className="px-4 py-2 text-right">Overall Average</td>
+                  <td className="px-4 py-2 text-center">{report.overallAverage !== null ? report.overallAverage.toFixed(2) + '%' : 'N/A'}</td>
+                </tr>
+                <tr>
+                  <td colSpan={4} className="px-4 py-2 text-right">Grade</td>
+                  <td className="px-4 py-2 text-center">{report.grade || 'N/A'}</td>
+                </tr>
+                <tr>
+                  <td colSpan={4} className="px-4 py-2 text-right">Rank</td>
+                  <td className="px-4 py-2 text-center">{report.rank ?? 'N/A'}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </CanSee>
       )}
     </div>
   );

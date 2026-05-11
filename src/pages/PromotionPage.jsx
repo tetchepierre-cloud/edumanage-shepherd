@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { generateTransferCertificate } from '../lib/transferCertificateGenerator';
 import { generateCompletionCertificate } from '../lib/completionCertificateGenerator';
 import { Save, FileText } from 'lucide-react';
+import { CanAct, CanSee } from '../components/PermissionGate';
 
 const DECISIONS = ['Promoted', 'Repeat', 'Transferred', 'Withdrawn'];
 const DECISION_COLORS = {
@@ -17,9 +18,9 @@ export default function PromotionPage() {
   const [classes, setClasses] = useState([]);
   const [selectedClass, setSelectedClass] = useState('');
   const [students, setStudents] = useState([]);
-  const [decisions, setDecisions] = useState({});          // manuel / final
-  const [autoDecisions, setAutoDecisions] = useState({});   // pré-rempli automatiquement
-  const [averages, setAverages] = useState({});             // moyennes annuelles
+  const [decisions, setDecisions] = useState({});
+  const [autoDecisions, setAutoDecisions] = useState({});
+  const [averages, setAverages] = useState({});
   const [existingDecisions, setExistingDecisions] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -47,7 +48,6 @@ export default function PromotionPage() {
   }, [selectedClass, academicYear]);
 
   const loadStudentsAndAverages = async () => {
-    // 1. Élèves actifs de la classe
     const { data: pupils } = await supabase
       .from('students')
       .select('id, first_name, last_name')
@@ -58,14 +58,12 @@ export default function PromotionPage() {
 
     if (!pupils?.length) { setLoading(false); return; }
 
-    // 2. Termes de l'année académique
     const { data: terms } = await supabase
       .from('academic_terms')
       .select('id, term_number')
       .eq('academic_year', academicYear)
       .order('term_number');
 
-    // 3. Matières de la classe pour cette année
     const { data: classSubjects } = await supabase
       .from('class_subjects')
       .select('id, coefficient')
@@ -73,7 +71,6 @@ export default function PromotionPage() {
       .eq('academic_year', academicYear)
       .eq('is_active', true);
 
-    // 4. Pour chaque élève, calculer la moyenne annuelle
     const avgMap = {};
     const autoDecMap = {};
 
@@ -114,14 +111,12 @@ export default function PromotionPage() {
         : null;
 
       avgMap[student.id] = annualAvg;
-      // Décision automatique : Promoted si moyenne >= 50, sinon Repeat
       autoDecMap[student.id] = (annualAvg !== null && annualAvg >= 50) ? 'Promoted' : 'Repeat';
     }
 
     setAverages(avgMap);
     setAutoDecisions(autoDecMap);
 
-    // 5. Charger les décisions existantes (manuel)
     const { data: decs } = await supabase
       .from('promotion_decisions')
       .select('student_id, decision')
@@ -132,7 +127,6 @@ export default function PromotionPage() {
     (decs || []).forEach(d => { existingMap[d.student_id] = d.decision; });
     setExistingDecisions(existingMap);
 
-    // Initialiser les décisions affichées : priorité au manuel, sinon auto
     const initDecisions = {};
     pupils.forEach(s => {
       initDecisions[s.id] = existingMap[s.id] || autoDecMap[s.id] || '';
@@ -205,20 +199,26 @@ export default function PromotionPage() {
       )}
 
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
-          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
-            <option value="">-- Select Class --</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Academic Year</label>
-          <input type="text" value={academicYear} onChange={e => setAcademicYear(e.target.value)} className="border rounded-lg px-3 py-2 text-sm w-28" placeholder="2025/2026" />
-        </div>
-        <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">
-          <Save size={16} /> {saving ? 'Saving...' : 'Save Decisions'}
-        </button>
+        <CanSee module="promotion" section="selectors" element="Class select">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Class</label>
+            <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[200px]">
+              <option value="">-- Select Class --</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </CanSee>
+        <CanSee module="promotion" section="selectors" element="Academic Year input">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Academic Year</label>
+            <input type="text" value={academicYear} onChange={e => setAcademicYear(e.target.value)} className="border rounded-lg px-3 py-2 text-sm w-28" placeholder="2025/2026" />
+          </div>
+        </CanSee>
+        <CanAct module="promotion" section="buttons" element="Save Decisions">
+          <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">
+            <Save size={16} /> {saving ? 'Saving...' : 'Save Decisions'}
+          </button>
+        </CanAct>
       </div>
 
       {loading ? (
@@ -230,7 +230,9 @@ export default function PromotionPage() {
               <tr>
                 <th className="text-left px-4 py-3">#</th>
                 <th className="text-left px-4 py-3">Student</th>
-                <th className="text-center px-4 py-3">Annual Avg.</th>
+                <CanSee module="promotion" section="table" element="Annual Avg">
+                  <th className="text-center px-4 py-3">Annual Avg.</th>
+                </CanSee>
                 <th className="text-center px-4 py-3">Decision</th>
                 <th className="text-center px-4 py-3">Actions</th>
               </tr>
@@ -249,36 +251,44 @@ export default function PromotionPage() {
                       {s.last_name} {s.first_name}
                       {isBelowThreshold && <span className="ml-2 text-xs text-red-600 font-normal">⚠️</span>}
                     </td>
-                    <td className="px-4 py-2 text-center">
-                      {annualAvg !== null ? annualAvg.toFixed(2) + '%' : 'N/A'}
-                    </td>
+                    <CanSee module="promotion" section="table" element="Annual Avg">
+                      <td className="px-4 py-2 text-center">
+                        {annualAvg !== null ? annualAvg.toFixed(2) + '%' : 'N/A'}
+                      </td>
+                    </CanSee>
                     <td className="px-4 py-2">
-                      <div className="flex justify-center gap-1">
-                        {DECISIONS.map(dec => (
-                          <button
-                            key={dec}
-                            onClick={() => handleDecisionChange(s.id, dec)}
-                            className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors
-                              ${currentDecision === dec ? DECISION_COLORS[dec] + ' shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}
-                          >
-                            {dec}
-                          </button>
-                        ))}
-                      </div>
+                      <CanAct module="promotion" section="table" element="Decision buttons">
+                        <div className="flex justify-center gap-1">
+                          {DECISIONS.map(dec => (
+                            <button
+                              key={dec}
+                              onClick={() => handleDecisionChange(s.id, dec)}
+                              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors
+                                ${currentDecision === dec ? DECISION_COLORS[dec] + ' shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}
+                            >
+                              {dec}
+                            </button>
+                          ))}
+                        </div>
+                      </CanAct>
                     </td>
                     <td className="px-4 py-2">
                       <div className="flex justify-center gap-2">
                         {isJhs3 && currentDecision === 'Promoted' && (
-                          <button onClick={() => handleCertificate(s.id, 'completion')}
-                            className="text-green-600 hover:text-green-800 text-xs font-medium" title="Certificate of Completion">
-                            <FileText size={16} /> Completion
-                          </button>
+                          <CanAct module="promotion" section="certificates" element="Completion Certificate">
+                            <button onClick={() => handleCertificate(s.id, 'completion')}
+                              className="text-green-600 hover:text-green-800 text-xs font-medium" title="Certificate of Completion">
+                              <FileText size={16} /> Completion
+                            </button>
+                          </CanAct>
                         )}
                         {currentDecision === 'Transferred' && (
-                          <button onClick={() => handleCertificate(s.id, 'transfer')}
-                            className="text-blue-600 hover:text-blue-800 text-xs font-medium" title="Transfer Certificate">
-                            <FileText size={16} /> Transfer
-                          </button>
+                          <CanAct module="promotion" section="certificates" element="Transfer Certificate">
+                            <button onClick={() => handleCertificate(s.id, 'transfer')}
+                              className="text-blue-600 hover:text-blue-800 text-xs font-medium" title="Transfer Certificate">
+                              <FileText size={16} /> Transfer
+                            </button>
+                          </CanAct>
                         )}
                       </div>
                     </td>

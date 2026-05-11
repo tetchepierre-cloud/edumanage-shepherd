@@ -12,8 +12,9 @@ export default function PermissionsTab() {
   const [permissions, setPermissions] = useState({});
   const [selectedRole, setSelectedRole] = useState('accountant');
   const [loading, setLoading] = useState(true);
+  const [moduleAccess, setModuleAccess] = useState({});
+  const [modules, setModules] = useState([]);
 
-  // Charger les éléments et les permissions existantes pour le rôle sélectionné
   useEffect(() => {
     if (!profile) return;
     loadData();
@@ -21,40 +22,48 @@ export default function PermissionsTab() {
 
   const loadData = async () => {
     setLoading(true);
-    // Récupérer tous les éléments
+    // Charger les éléments de permission
     const { data: elems } = await supabase
       .from('permission_elements')
       .select('*')
       .order('module')
       .order('section')
       .order('element');
-
     setElements(elems || []);
 
-    // Récupérer les permissions pour le rôle sélectionné
+    // Charger les permissions pour le rôle sélectionné
     const { data: perms } = await supabase
       .from('role_permissions')
       .select('permission_element_id, enabled')
       .eq('role', selectedRole);
-
     const permsMap = {};
     (perms || []).forEach(p => { permsMap[p.permission_element_id] = p.enabled; });
     setPermissions(permsMap);
+
+    // Charger l'accès aux modules
+    const { data: allModules } = await supabase
+      .from('module_access')
+      .select('module')
+      .order('module');
+    const uniqueModules = [...new Set((allModules || []).map(m => m.module))];
+    setModules(uniqueModules);
+
+    const { data: access } = await supabase
+      .from('module_access')
+      .select('module, can_read')
+      .eq('role', selectedRole);
+    const accessMap = {};
+    (access || []).forEach(a => { accessMap[a.module] = a.can_read; });
+    setModuleAccess(accessMap);
 
     setLoading(false);
   };
 
   const togglePermission = async (elementId, enabled) => {
-    // Upsert dans role_permissions
-    const { error } = await supabase
+    await supabase
       .from('role_permissions')
       .upsert({ role: selectedRole, permission_element_id: elementId, enabled }, { onConflict: 'role, permission_element_id' });
-
-    if (error) {
-      toast.error('Failed to update permission');
-    } else {
-      setPermissions(prev => ({ ...prev, [elementId]: enabled }));
-    }
+    setPermissions(prev => ({ ...prev, [elementId]: enabled }));
   };
 
   const toggleAll = (module, enabled) => {
@@ -62,6 +71,13 @@ export default function PermissionsTab() {
     moduleElements.forEach(e => {
       togglePermission(e.id, enabled);
     });
+  };
+
+  const toggleModuleAccess = async (moduleName, enabled) => {
+    await supabase
+      .from('module_access')
+      .upsert({ role: selectedRole, module: moduleName, can_read: enabled }, { onConflict: 'role, module' });
+    setModuleAccess(prev => ({ ...prev, [moduleName]: enabled }));
   };
 
   // Grouper par module pour l'affichage
@@ -92,7 +108,29 @@ export default function PermissionsTab() {
         </div>
       </div>
 
-      {/* Liste des permissions par module */}
+      {/* --- Section Accès aux modules --- */}
+      <div className="bg-white rounded-xl shadow p-6 max-w-2xl">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Module Access (Menu)</h3>
+        <p className="text-sm text-gray-500 mb-4">Enable or disable entire modules for this role.</p>
+        <div className="space-y-2">
+          {modules.map(module => (
+            <div key={module} className="flex items-center justify-between py-2 border-b border-gray-100">
+              <span className="text-sm font-medium text-gray-700 capitalize">{module}</span>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
+                  checked={moduleAccess[module] || false}
+                  onChange={e => toggleModuleAccess(module, e.target.checked)}
+                />
+                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Sections des permissions fines par module */}
       {Object.keys(grouped).map(module => (
         <div key={module} className="bg-white rounded-xl shadow p-6">
           <div className="flex items-center justify-between mb-4">

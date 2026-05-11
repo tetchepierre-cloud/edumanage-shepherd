@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { logAction } from '../lib/audit'
+import { CanAct, CanSee } from '../components/PermissionGate'
 
 const FEE_TYPES = ['tuition', 'exam', 'canteen', 'transport', 'uniform', 'other'];
 
@@ -55,7 +56,6 @@ export default function StudentsPage() {
   // ── Chargement des réductions pour un élève et son niveau ──────────────
   const loadDiscounts = async (student) => {
     setLoadingDiscounts(true)
-    // 1. Récupérer le niveau de l'élève
     if (!student.classes?.name) {
       setDiscounts([])
       setLoadingDiscounts(false)
@@ -75,8 +75,7 @@ export default function StudentsPage() {
       return
     }
 
-    // 2. Récupérer tous les frais actifs pour ce niveau et l'année en cours
-    const academicYear = '2025/2026' // on pourrait le récupérer depuis app_settings
+    const academicYear = '2025/2026'
     const { data: fees } = await supabase
       .from('fee_structure')
       .select('id, fee_name, fee_type, amount')
@@ -85,7 +84,6 @@ export default function StudentsPage() {
       .eq('is_active', true)
       .order('fee_name')
 
-    // 3. Récupérer les réductions existantes pour cet élève
     const { data: existingDiscounts } = await supabase
       .from('student_fee_discounts')
       .select('*')
@@ -96,7 +94,6 @@ export default function StudentsPage() {
       discountMap[d.fee_structure_id] = d
     })
 
-    // 4. Créer la liste complète
     const list = (fees || []).map(fee => ({
       fee_structure_id: fee.id,
       fee_name: fee.fee_name,
@@ -119,7 +116,6 @@ export default function StudentsPage() {
     }
 
     if (numValue === 0) {
-      // Supprimer la réduction existante
       const { error } = await supabase
         .from('student_fee_discounts')
         .delete()
@@ -180,7 +176,7 @@ export default function StudentsPage() {
     })
     setMessage('')
     setModalTab('info')
-    loadDiscounts(student)   // charger les réductions
+    loadDiscounts(student)
     setShowForm(true)
   }
 
@@ -302,13 +298,15 @@ export default function StudentsPage() {
           <h2 className="text-2xl font-bold text-gray-900">Students</h2>
           <p className="text-gray-500 text-sm">{students.length} students enrolled</p>
         </div>
-        <button
-          onClick={openAddForm}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
-                     rounded-lg font-medium transition-colors flex items-center gap-2"
-        >
-          ➕ Add Student
-        </button>
+        <CanAct module="students" section="header" element="Add Student button">
+          <button
+            onClick={openAddForm}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
+                       rounded-lg font-medium transition-colors flex items-center gap-2"
+          >
+            ➕ Add Student
+          </button>
+        </CanAct>
       </div>
 
       {/* ── Message hors modal ── */}
@@ -324,26 +322,30 @@ export default function StudentsPage() {
 
       {/* ── Filtres ── */}
       <div className="bg-white rounded-xl shadow-sm p-4 flex flex-wrap gap-3">
-        <input
-          type="text"
-          placeholder="🔍 Search by name, parent or phone..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="flex-1 min-w-48 px-4 py-2 border border-gray-300
-                     rounded-lg focus:ring-2 focus:ring-blue-500
-                     outline-none text-sm"
-        />
-        <select
-          value={filterClass}
-          onChange={e => setFilterClass(e.target.value)}
-          className="px-4 py-2 border border-gray-300 rounded-lg
-                     focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-        >
-          <option value="">All Classes</option>
-          {classes.map(c => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
+        <CanSee module="students" section="filters" element="Search field">
+          <input
+            type="text"
+            placeholder="🔍 Search by name, parent or phone..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="flex-1 min-w-48 px-4 py-2 border border-gray-300
+                       rounded-lg focus:ring-2 focus:ring-blue-500
+                       outline-none text-sm"
+          />
+        </CanSee>
+        <CanSee module="students" section="filters" element="Class select">
+          <select
+            value={filterClass}
+            onChange={e => setFilterClass(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg
+                       focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+          >
+            <option value="">All Classes</option>
+            {classes.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </CanSee>
         <button
           onClick={() => { setSearch(''); setFilterClass('') }}
           className="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm
@@ -418,20 +420,24 @@ export default function StudentsPage() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex gap-2">
-                        <button
-                          onClick={() => openEditForm(student)}
-                          className="text-blue-600 hover:text-blue-800
-                                     text-sm font-medium"
-                        >
-                          ✏️ Edit
-                        </button>
-                        <button
-                          onClick={() => handleDelete(student.id)}
-                          className="text-red-500 hover:text-red-700
-                                     text-sm font-medium"
-                        >
-                          🗑️ Delete
-                        </button>
+                        <CanAct module="students" section="table" element="Edit button">
+                          <button
+                            onClick={() => openEditForm(student)}
+                            className="text-blue-600 hover:text-blue-800
+                                       text-sm font-medium"
+                          >
+                            ✏️ Edit
+                          </button>
+                        </CanAct>
+                        <CanAct module="students" section="table" element="Delete button">
+                          <button
+                            onClick={() => handleDelete(student.id)}
+                            className="text-red-500 hover:text-red-700
+                                       text-sm font-medium"
+                          >
+                            🗑️ Delete
+                          </button>
+                        </CanAct>
                       </div>
                     </td>
                   </tr>
@@ -465,14 +471,18 @@ export default function StudentsPage() {
             {/* Onglets (uniquement en édition) */}
             {editStudent && (
               <div className="flex gap-2 px-6 pt-4 border-b pb-2">
-                <button
-                  onClick={() => setModalTab('info')}
-                  className={`px-3 py-1 rounded text-sm font-medium ${modalTab === 'info' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}
-                >Info</button>
-                <button
-                  onClick={() => setModalTab('discounts')}
-                  className={`px-3 py-1 rounded text-sm font-medium ${modalTab === 'discounts' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}
-                >Discounts</button>
+                <CanAct module="students" section="modal" element="Info tab">
+                  <button
+                    onClick={() => setModalTab('info')}
+                    className={`px-3 py-1 rounded text-sm font-medium ${modalTab === 'info' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+                  >Info</button>
+                </CanAct>
+                <CanAct module="students" section="modal" element="Discounts tab">
+                  <button
+                    onClick={() => setModalTab('discounts')}
+                    className={`px-3 py-1 rounded text-sm font-medium ${modalTab === 'discounts' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+                  >Discounts</button>
+                </CanAct>
               </div>
             )}
 
@@ -592,7 +602,6 @@ export default function StudentsPage() {
               </form>
             )}
 
-            {/* ── Onglet Discounts ── */}
             {modalTab === 'discounts' && (
               <div className="p-6 space-y-4">
                 <h3 className="font-semibold text-gray-900">Fee Adjustments for {editStudent?.first_name} {editStudent?.last_name}</h3>
@@ -644,18 +653,13 @@ export default function StudentsPage() {
                     ))}
                   </div>
                 )}
-                {message && (
-                  <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
-                    message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
-                    {message}
-                  </div>
-                )}
                 <button onClick={() => setShowForm(false)} className="text-sm text-blue-600 hover:underline">Close</button>
               </div>
             )}
           </div>
         </div>
       )}
+
     </div>
   )
 }

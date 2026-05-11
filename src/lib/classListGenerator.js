@@ -12,7 +12,7 @@ export async function generateClassListPDF({ className, students, school }) {
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 15;
   let y = margin;
-  
+
   // Charger le logo si disponible
   let logoData = null;
   if (school.logo) {
@@ -29,15 +29,16 @@ export async function generateClassListPDF({ className, students, school }) {
     }
   }
 
-    // --- En-tête école (avec logo si disponible) ---
+  // --- En-tête école (avec logo si disponible) ---
   if (logoData) {
-    const logoSize = 18;
-    doc.addImage(logoData, 'JPEG', margin, y - 2, logoSize, logoSize);
+    const logoSize = 36;
+    // Logo remonté : positionné tout en haut, à la marge
+    doc.addImage(logoData, 'JPEG', margin, margin - 15, logoSize, logoSize);
     const textX = margin + logoSize + 4;
     doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
-    doc.text(school.name || 'School Name', textX, y + 4, { align: 'left' });
-    y += 7;
+    doc.text(school.name || 'School Name', textX, margin + 4, { align: 'left' });
+    y = margin + 7; // repartir après la première ligne de texte
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.text(school.address || 'Address', textX, y + 4, { align: 'left' });
@@ -46,6 +47,7 @@ export async function generateClassListPDF({ className, students, school }) {
       doc.text(`Tel: ${school.phone}`, textX, y + 4, { align: 'left' });
       y += 5;
     }
+    y += 4;
   } else {
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
@@ -59,10 +61,14 @@ export async function generateClassListPDF({ className, students, school }) {
       doc.text(`Tel: ${school.phone}`, pageW / 2, y, { align: 'center' });
       y += 5;
     }
+    y += 4;
   }
-  y += 4;
 
-  // --- Titre ---
+  // --- Titre avec encadrement ---
+  doc.setDrawColor(30, 77, 145);
+  doc.setLineWidth(0.5);
+  doc.line(margin, y, pageW - margin, y);
+  y += 5;
   doc.setFontSize(14);
   doc.setFont('helvetica', 'bold');
   doc.text(`CLASS LIST - ${className.toUpperCase()}`, pageW / 2, y, { align: 'center' });
@@ -70,21 +76,20 @@ export async function generateClassListPDF({ className, students, school }) {
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
   doc.text(`Academic Year: 2025/2026   |   Total: ${students.length} pupils`, pageW / 2, y, { align: 'center' });
+  y += 5;
+  doc.line(margin, y, pageW - margin, y);
   y += 10;
 
-  // --- Tableau ---
+  // --- Tableau (libellés STRICTEMENT INCHANGÉS) ---
   const headers = ['No.', 'Full Name', 'Gender', 'Date of Birth', 'Parent / Guardian', 'Phone'];
   const colWidths = [10, 48, 16, 28, 45, 30];
   const startX = margin;
 
-  // Fonction qui dessine une ligne d'en‑tête
   function drawHeader(yPos) {
     let xP = startX;
     for (let i = 0; i < headers.length; i++) {
-      // Fond bleu
       doc.setFillColor(30, 77, 145);
       doc.rect(xP, yPos, colWidths[i], 6, 'F');
-      // Texte blanc
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(8);
       doc.setFont('helvetica', 'bold');
@@ -93,7 +98,6 @@ export async function generateClassListPDF({ className, students, school }) {
     }
   }
 
-  // Dessiner la première en‑tête
   drawHeader(y);
   y += 6;
 
@@ -105,8 +109,7 @@ export async function generateClassListPDF({ className, students, school }) {
   for (let idx = 0; idx < students.length; idx++) {
     const student = students[idx];
 
-    // Saut de page
-    if (y + 10 > pageH - margin) {
+    if (y + 10 > pageH - margin - 20) {
       doc.addPage();
       y = margin;
       drawHeader(y);
@@ -116,9 +119,8 @@ export async function generateClassListPDF({ className, students, school }) {
       doc.setFont('helvetica', 'normal');
     }
 
-    // Alternance de couleurs
     if (idx % 2 === 0) {
-      doc.setFillColor(245, 245, 245);
+      doc.setFillColor(245, 245, 250);
       doc.rect(startX, y, colWidths.reduce((a, b) => a + b, 0), 7, 'F');
     }
 
@@ -141,11 +143,10 @@ export async function generateClassListPDF({ className, students, school }) {
       doc.text(row[i], x + 1, y + 5);
       x += colWidths[i];
     }
-
     y += 7;
   }
 
-  // --- Pied de page ---
+  // --- Signatures ---
   y += 15;
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
@@ -153,6 +154,18 @@ export async function generateClassListPDF({ className, students, school }) {
   y += 10;
   doc.text('Head of School Signature: _________________________', margin, y);
 
-  // Ouvrir dans un nouvel onglet
+  // --- Pied de page (bande réduite de moitié : 6 mm au lieu de 12) ---
+  const footerY = pageH - 6;
+  doc.setFillColor(30, 77, 145);
+  doc.rect(0, footerY, pageW, 6, 'F');
+  doc.setFontSize(7);
+  doc.setTextColor(255, 255, 255);
+  doc.text(
+    `Generated on ${new Date().toLocaleDateString('en-GB')} — ${school.name || 'School'} — EduManage GH`,
+    pageW / 2,
+    footerY + 4,
+    { align: 'center' }
+  );
+
   window.open(URL.createObjectURL(doc.output('blob')), '_blank');
 }

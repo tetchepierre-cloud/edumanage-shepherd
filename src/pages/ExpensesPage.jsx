@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { logAction } from '../lib/audit'
+import { CanAct, CanSee } from '../components/PermissionGate'  // ← ajouté
 
 const CATEGORIES = [
   { value: 'books_textbooks',    label: 'Books & Textbooks'    },
@@ -100,19 +101,15 @@ export default function ExpensesPage() {
       }
 
       if (editingId) {
-        // ── Sauvegarder l'ancienne donnée AVANT modification ──────────────────
         const oldExpense = expenses.find(e => e.id === editingId)
-
         const { data, error } = await supabase
           .from('expenses')
           .update({ ...payload, updated_at: new Date().toISOString() })
           .eq('id', editingId)
           .select()
           .single()
-
         if (error) throw error
 
-        // ── Audit log UPDATE ──────────────────────────────────────────────────
         await logAction({
           action:      'UPDATE',
           tableName:   'expenses',
@@ -122,19 +119,15 @@ export default function ExpensesPage() {
           description: `Updated expense — "${data.description}" · `
                      + `GHS ${data.amount} · ${data.category} · ${data.status}`,
         })
-
         setSuccess('Expense updated successfully!')
-
       } else {
         const { data, error } = await supabase
           .from('expenses')
           .insert([payload])
           .select()
           .single()
-
         if (error) throw error
 
-        // ── Audit log CREATE ──────────────────────────────────────────────────
         await logAction({
           action:      'CREATE',
           tableName:   'expenses',
@@ -144,7 +137,6 @@ export default function ExpensesPage() {
           description: `New expense — "${data.description}" · `
                      + `GHS ${data.amount} · ${data.category} · ${data.status}`,
         })
-
         setSuccess('Expense recorded successfully!')
       }
 
@@ -153,7 +145,6 @@ export default function ExpensesPage() {
       setFormData(initialForm)
       setEditingId(null)
       setTimeout(() => setSuccess(''), 3000)
-
     } catch (err) {
       setError(err.message)
     } finally {
@@ -177,18 +168,14 @@ export default function ExpensesPage() {
   }
 
   const handleDelete = async (id) => {
-    // ── Sauvegarder les données AVANT suppression ─────────────────────────────
     const expenseToDelete = expenses.find(e => e.id === id)
-
     try {
       const { error } = await supabase
         .from('expenses')
         .delete()
         .eq('id', id)
-
       if (error) throw error
 
-      // ── Audit log DELETE ──────────────────────────────────────────────────
       await logAction({
         action:      'DELETE',
         tableName:   'expenses',
@@ -198,12 +185,10 @@ export default function ExpensesPage() {
         description: `Deleted expense — "${expenseToDelete?.description}" · `
                    + `GHS ${expenseToDelete?.amount} · ${expenseToDelete?.category}`,
       })
-
       setSuccess('Expense deleted successfully!')
       setDeleteConfirm(null)
       await fetchExpenses()
       setTimeout(() => setSuccess(''), 3000)
-
     } catch (err) {
       setError('Failed to delete: ' + err.message)
       setDeleteConfirm(null)
@@ -233,15 +218,12 @@ export default function ExpensesPage() {
 
   const totalAll = expenses
     .reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
-
   const totalApproved = expenses
     .filter(e => e.status === 'approved')
     .reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
-
   const totalPending = expenses
     .filter(e => e.status === 'pending')
     .reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
-
   const totalThisMonth = expenses
     .filter(e => {
       const d   = new Date(e.created_at)
@@ -255,16 +237,12 @@ export default function ExpensesPage() {
 
   const getCategoryLabel = val =>
     CATEGORIES.find(c => c.value === val)?.label || val
-
   const getPaymentLabel = val =>
     PAYMENT_METHODS.find(p => p.value === val)?.label || val
-
   const formatDate = dateStr =>
     dateStr ? new Date(dateStr).toLocaleDateString('en-GB') : '—'
-
   const formatAmount = amount =>
     `GHS ${parseFloat(amount || 0).toFixed(2)}`
-
   const getStatusBadge = (status) => {
     const map = {
       approved: 'bg-green-100 text-green-800',
@@ -278,7 +256,6 @@ export default function ExpensesPage() {
       </span>
     )
   }
-
   const getCategoryBadge = (category) => {
     const colors = {
       utilities:   'bg-blue-100 text-blue-800',
@@ -310,14 +287,16 @@ export default function ExpensesPage() {
             Track and manage school expenses
           </p>
         </div>
-        <button
-          onClick={openAddModal}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
-                     rounded-lg flex items-center gap-2 transition-colors"
-        >
-          <span className="text-lg font-bold">+</span>
-          Add Expense
-        </button>
+        <CanAct module="expenses" section="header" element="Add Expense button">
+          <button
+            onClick={openAddModal}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
+                       rounded-lg flex items-center gap-2 transition-colors"
+          >
+            <span className="text-lg font-bold">+</span>
+            Add Expense
+          </button>
+        </CanAct>
       </div>
 
       {/* ── Alerts ── */}
@@ -377,34 +356,38 @@ export default function ExpensesPage() {
       {/* ── Filters ── */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div className="flex flex-wrap gap-3 items-center">
-          <div>
-            <label className="text-sm text-gray-600 mr-2">Category:</label>
-            <select
-              value={filterCategory}
-              onChange={e => setFilterCategory(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm
-                         focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Categories</option>
-              {CATEGORIES.map(c => (
-                <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm text-gray-600 mr-2">Status:</label>
-            <select
-              value={filterStatus}
-              onChange={e => setFilterStatus(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm
-                         focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Statuses</option>
-              {STATUSES.map(s => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-          </div>
+          <CanSee module="expenses" section="filters" element="Category select">
+            <div>
+              <label className="text-sm text-gray-600 mr-2">Category:</label>
+              <select
+                value={filterCategory}
+                onChange={e => setFilterCategory(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All Categories</option>
+                {CATEGORIES.map(c => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </select>
+            </div>
+          </CanSee>
+          <CanSee module="expenses" section="filters" element="Status select">
+            <div>
+              <label className="text-sm text-gray-600 mr-2">Status:</label>
+              <select
+                value={filterStatus}
+                onChange={e => setFilterStatus(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All Statuses</option>
+                {STATUSES.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+            </div>
+          </CanSee>
           <div className="ml-auto text-sm text-gray-500">
             {filtered.length} expense{filtered.length !== 1 ? 's' : ''} found
           </div>
@@ -412,113 +395,119 @@ export default function ExpensesPage() {
       </div>
 
       {/* ── Table ── */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <div className="animate-spin rounded-full h-8 w-8
-                            border-b-2 border-blue-600" />
-            <span className="ml-3 text-gray-500">Loading expenses...</span>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-16">
-            <p className="text-4xl mb-3">📊</p>
-            <p className="text-gray-500 font-medium">No expenses found</p>
-            <p className="text-gray-400 text-sm mt-1">
-              Click "Add Expense" to record your first expense
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-100">
-                <tr>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">#</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Description</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Category</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Method</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Receipt</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">Amount</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Status</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Date</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {filtered.map((expense, index) => (
-                  <tr
-                    key={expense.id}
-                    className="hover:bg-gray-50 transition-colors"
-                  >
-                    <td className="px-4 py-3 text-gray-400">{index + 1}</td>
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900">
-                        {expense.description}
-                      </p>
-                      {expense.notes && (
-                        <p className="text-xs text-gray-400 mt-0.5
-                                      truncate max-w-xs">
-                          {expense.notes}
+      <CanSee module="expenses" section="table" element="Expense rows">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="animate-spin rounded-full h-8 w-8
+                              border-b-2 border-blue-600" />
+              <span className="ml-3 text-gray-500">Loading expenses...</span>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-16">
+              <p className="text-4xl mb-3">📊</p>
+              <p className="text-gray-500 font-medium">No expenses found</p>
+              <p className="text-gray-400 text-sm mt-1">
+                Click "Add Expense" to record your first expense
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-100">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">#</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Description</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Category</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Method</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Receipt</th>
+                    <th className="text-right px-4 py-3 font-semibold text-gray-600">Amount</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Status</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Date</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {filtered.map((expense, index) => (
+                    <tr
+                      key={expense.id}
+                      className="hover:bg-gray-50 transition-colors"
+                    >
+                      <td className="px-4 py-3 text-gray-400">{index + 1}</td>
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-gray-900">
+                          {expense.description}
                         </p>
+                        {expense.notes && (
+                          <p className="text-xs text-gray-400 mt-0.5
+                                        truncate max-w-xs">
+                            {expense.notes}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {getCategoryBadge(expense.category)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {getPaymentLabel(expense.payment_method)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 font-mono text-xs">
+                        {expense.receipt_number || '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold text-gray-900">
+                        {formatAmount(expense.amount)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {getStatusBadge(expense.status)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">
+                        {formatDate(expense.created_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <CanAct module="expenses" section="table" element="Edit button">
+                            <button
+                              onClick={() => handleEdit(expense)}
+                              className="text-blue-600 hover:text-blue-800 text-xs
+                                         font-medium px-2 py-1 rounded
+                                         hover:bg-blue-50 transition-colors"
+                            >
+                              ✏️ Edit
+                            </button>
+                          </CanAct>
+                          <CanAct module="expenses" section="table" element="Delete button">
+                            <button
+                              onClick={() => setDeleteConfirm(expense.id)}
+                              className="text-red-600 hover:text-red-800 text-xs
+                                         font-medium px-2 py-1 rounded
+                                         hover:bg-red-50 transition-colors"
+                            >
+                              🗑️ Delete
+                            </button>
+                          </CanAct>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-gray-50 border-t border-gray-200">
+                  <tr>
+                    <td colSpan={5} className="px-4 py-3 font-semibold text-gray-600">
+                      Total ({filtered.length} items)
+                    </td>
+                    <td className="px-4 py-3 text-right font-bold text-gray-900">
+                      {formatAmount(
+                        filtered.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
                       )}
                     </td>
-                    <td className="px-4 py-3">
-                      {getCategoryBadge(expense.category)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {getPaymentLabel(expense.payment_method)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 font-mono text-xs">
-                      {expense.receipt_number || '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-900">
-                      {formatAmount(expense.amount)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {getStatusBadge(expense.status)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500">
-                      {formatDate(expense.created_at)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleEdit(expense)}
-                          className="text-blue-600 hover:text-blue-800 text-xs
-                                     font-medium px-2 py-1 rounded
-                                     hover:bg-blue-50 transition-colors"
-                        >
-                          ✏️ Edit
-                        </button>
-                        <button
-                          onClick={() => setDeleteConfirm(expense.id)}
-                          className="text-red-600 hover:text-red-800 text-xs
-                                     font-medium px-2 py-1 rounded
-                                     hover:bg-red-50 transition-colors"
-                        >
-                          🗑️ Delete
-                        </button>
-                      </div>
-                    </td>
+                    <td colSpan={3} />
                   </tr>
-                ))}
-              </tbody>
-              <tfoot className="bg-gray-50 border-t border-gray-200">
-                <tr>
-                  <td colSpan={5} className="px-4 py-3 font-semibold text-gray-600">
-                    Total ({filtered.length} items)
-                  </td>
-                  <td className="px-4 py-3 text-right font-bold text-gray-900">
-                    {formatAmount(
-                      filtered.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
-                    )}
-                  </td>
-                  <td colSpan={3} />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
-      </div>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      </CanSee>
 
       {/* ── Add / Edit Modal ── */}
       {showModal && (

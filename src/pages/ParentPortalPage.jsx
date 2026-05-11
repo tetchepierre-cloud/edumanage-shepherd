@@ -1,27 +1,63 @@
 // src/pages/ParentPortalPage.jsx
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { UserCircle, LogOut, GraduationCap, Upload } from 'lucide-react';
+import { UserCircle, LogOut, GraduationCap, Upload, FileText } from 'lucide-react';
+import { computeTermReport } from '../lib/gradeCalculations';
+import { generateReportCard } from '../lib/reportCardGenerator';
+import { generateKgReportCard } from '../lib/kgReportCardGenerator';
+
+const ACADEMIC_YEAR = '2025/2026';
 
 export default function ParentPortalPage() {
+  // Authentification
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [session, setSession] = useState(null);
+  
+  // Données élève
   const [student, setStudent] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const [balance, setBalance] = useState({ expected: 0, paid: 0, remaining: 0 });
+  const [attendance, setAttendance] = useState({ present: 0, absent: 0, late: 0 });
+  const [terms, setTerms] = useState([]);
+
+  // Justificatifs
   const [showJustifyModal, setShowJustifyModal] = useState(false);
   const [justifyFile, setJustifyFile] = useState(null);
   const [justifyReason, setJustifyReason] = useState('');
   const [justifyMessage, setJustifyMessage] = useState('');
   const [justifications, setJustifications] = useState([]);
 
+  // Paramètres de l'école (pour les bulletins)
+  const [schoolConfig, setSchoolConfig] = useState({
+    name: 'School Name',
+    address: '',
+    phone: '',
+    email: '',
+    logo: null,
+  });
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) handleLoggedIn(session);
     });
+    loadSchoolConfig();
   }, []);
+
+  const loadSchoolConfig = async () => {
+    const { data } = await supabase.from('app_settings').select('*');
+    const cfg = {};
+    (data || []).forEach(d => { cfg[d.key] = d.value; });
+    setSchoolConfig({
+      name: cfg.school_name || 'School Name',
+      address: cfg.address || '',
+      phone: cfg.phone || '',
+      email: cfg.email || '',
+      logo: cfg.logo || null,
+    });
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -41,14 +77,24 @@ export default function ParentPortalPage() {
     const studentId = currentSession.user.user_metadata?.student_id;
     if (!studentId) return;
 
-    // ✅ Utilise maybeSingle() au lieu de single()
+    // Informations de l'élève (corrigé : pas de jointure imbriquée)
     const { data: studentData } = await supabase
       .from('students')
-      .select('first_name, last_name, class_id, classes(name)')
+      .select('first_name, last_name, class_id')
       .eq('id', studentId)
       .maybeSingle();
+
+    if (studentData && studentData.class_id) {
+      const { data: classData } = await supabase
+        .from('classes')
+        .select('name, level')
+        .eq('id', studentData.class_id)
+        .single();
+      studentData.classes = classData;
+    }
     setStudent(studentData);
 
+    // Notifications
     const { data: notifs } = await supabase
       .from('attendance_notifications')
       .select('*')
@@ -57,12 +103,120 @@ export default function ParentPortalPage() {
       .limit(5);
     setNotifications(notifs || []);
 
+    // Justificatifs
     const { data: justifs } = await supabase
       .from('absence_justifications')
       .select('*')
       .eq('student_id', studentId)
       .order('created_at', { ascending: false });
     setJustifications(justifs || []);
+
+    // Solde des frais
+    fetchBalance(studentId);
+
+    // Assiduité
+    fetchAttendance(studentId);
+
+    // Termes disponibles pour les bulletins
+    fetchTerms();
+  };
+
+  const fetchBalance = async (studentId) => {
+    // 1. Récupérer le class_id de l'élève
+    const { data: studentData } = await supabase
+      .from('students')
+      .select('class_id')
+      .eq('id', studentId)
+      .single();
+
+    if (!studentData?.class_id) return;
+
+    // 2. Récupérer le level_id de la classe
+    const { data: classData } = await supabase
+      .from('classes')
+      .select('level_id')
+      .eq('id', studentData.class_id)
+      .single();
+
+    if (!classData?.level_id) return;
+
+    const levelId = classData.level_id;
+
+    // 3. Total attendu
+    const { data: fees } = await supabase
+      .from('fee_structure')
+      .select('amount')
+      .eq('level_id', levelId)
+      .eq('academic_year', ACADEMIC_YEAR)
+      .eq('is_active', true);
+
+    const totalExpected = (fees || []).reduce((sum, f) => sum + parseFloat(f.amount), 0);
+
+    // 4. Total payé
+    const { data: payments } = await supabase
+      .from('fee_payments')
+      .select('amount')
+      .eq('student_id', studentId)
+      .eq('academic_year', ACADEMIC_YEAR)
+      .in('status', ['paid', 'partial']);
+
+    const totalPaid = (payments || []).reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    const remaining = Math.max(0, totalExpected - totalPaid);
+    setBalance({ expected: totalExpected, paid: totalPaid, remaining });
+  };
+
+  const fetchAttendance = async (studentId) => {
+    const { data } = await supabase
+      .from('attendance')
+      .select('status')
+      .eq('student_id', studentId);
+
+    const counts = { present: 0, absent: 0, late: 0 };
+    (data || []).forEach(record => {
+      if (record.status === 'P') counts.present++;
+      else if (record.status === 'A') counts.absent++;
+      else if (record.status === 'L') counts.late++;
+    });
+    setAttendance(counts);
+  };
+
+  const fetchTerms = async () => {
+    const { data } = await supabase
+      .from('academic_terms')
+      .select('id, name, academic_year')
+      .eq('academic_year', ACADEMIC_YEAR)
+      .order('term_number');
+    setTerms(data || []);
+  };
+
+  const handleGenerateReport = async (termId) => {
+    if (!student || !student.id) return;
+    const term = terms.find(t => t.id === termId);
+    if (!term) return;
+
+    const isKg = student.classes?.level === 'KG';
+
+    if (isKg) {
+      await generateKgReportCard({
+        studentId: student.id,
+        termId: term.id,
+        className: student.classes?.name || '',
+        school: schoolConfig,
+      });
+    } else {
+      const report = await computeTermReport(student.id, term.id);
+      generateReportCard({
+        student: {
+          first_name: student.first_name || '',
+          last_name: student.last_name || '',
+          class: student.classes?.name || '',
+          date_of_birth: '',
+        },
+        report,
+        term,
+        school: schoolConfig,
+      });
+    }
   };
 
   const handleUploadJustification = async () => {
@@ -82,13 +236,13 @@ export default function ParentPortalPage() {
       .from('justificatifs')
       .getPublicUrl(fileName);
 
-    const { data: parentAccount, error: accountError } = await supabase
+    const { data: parentAccount } = await supabase
       .from('parent_portal_accounts')
       .select('id')
       .eq('student_id', student.id)
       .maybeSingle();
 
-    if (accountError || !parentAccount) {
+    if (!parentAccount) {
       setJustifyMessage('Could not verify parent account.');
       return;
     }
@@ -103,7 +257,7 @@ export default function ParentPortalPage() {
     if (insertError) {
       setJustifyMessage('Insert failed: ' + insertError.message);
     } else {
-      setJustifyMessage('Justification submitted! It will be reviewed by the teacher.');
+      setJustifyMessage('Justification submitted!');
       setShowJustifyModal(false);
       setJustifyFile(null);
       setJustifyReason('');
@@ -122,9 +276,14 @@ export default function ParentPortalPage() {
     setStudent(null);
     setNotifications([]);
     setJustifications([]);
+    setBalance({ expected: 0, paid: 0, remaining: 0 });
+    setAttendance({ present: 0, absent: 0, late: 0 });
+    setTerms([]);
   };
 
   if (session && student) {
+    const formatGHS = (n) => `GHS ${parseFloat(n || 0).toFixed(2)}`;
+
     return (
       <div className="min-h-screen bg-gray-100 p-6">
         <div className="max-w-4xl mx-auto">
@@ -138,14 +297,71 @@ export default function ParentPortalPage() {
             </button>
           </div>
 
-          <div className="bg-white rounded-xl shadow p-6 text-center mb-6">
-            <GraduationCap size={64} className="mx-auto text-blue-400 mb-4" />
-            <h2 className="text-lg font-semibold text-gray-700">Student Progress Dashboard</h2>
-            <p className="text-gray-500 mt-2">
-              Attendance, grades and financial statements will appear here once the school publishes them.
-            </p>
+          {/* 💰 Solde des Frais */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              📚 Your Child's School Fees ({ACADEMIC_YEAR})
+            </h2>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-sm text-gray-500">Total fees for the year</p>
+                <p className="text-xl font-bold text-blue-600">{formatGHS(balance.expected)}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-sm text-gray-500">Already paid</p>
+                <p className="text-xl font-bold text-green-600">{formatGHS(balance.paid)}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-sm text-gray-500">Left to pay</p>
+                <p className={`text-xl font-bold ${balance.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {formatGHS(balance.remaining)}
+                </p>
+              </div>
+            </div>
           </div>
 
+          {/* 📅 Assiduité */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4">📅 Attendance Summary</h2>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="bg-green-50 rounded-lg p-3">
+                <p className="text-sm text-gray-500">Days Present</p>
+                <p className="text-2xl font-bold text-green-700">{attendance.present}</p>
+              </div>
+              <div className="bg-red-50 rounded-lg p-3">
+                <p className="text-sm text-gray-500">Days Absent</p>
+                <p className="text-2xl font-bold text-red-700">{attendance.absent}</p>
+              </div>
+              <div className="bg-yellow-50 rounded-lg p-3">
+                <p className="text-sm text-gray-500">Days Late</p>
+                <p className="text-2xl font-bold text-yellow-700">{attendance.late}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* 📚 Bulletins */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">📚 Terminal Reports</h2>
+            {terms.length === 0 ? (
+              <p className="text-gray-400 text-sm">No terms available yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {terms.map(term => (
+                  <li key={term.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+                    <span className="font-medium">{term.name} ({term.academic_year})</span>
+                    <button
+                      onClick={() => handleGenerateReport(term.id)}
+                      className="text-blue-600 hover:text-blue-800 text-sm font-medium flex items-center gap-1"
+                    >
+                      <FileText size={16} /> View Report
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* 📢 Notifications */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">Recent Notifications</h2>
             {notifications.length === 0 ? (
@@ -162,6 +378,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
+          {/* 📁 Justificatifs */}
           <div className="bg-white rounded-xl shadow p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">Absence Justifications</h2>
@@ -198,6 +415,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
+          {/* Modal Justification */}
           {showJustifyModal && (
             <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
@@ -235,6 +453,7 @@ export default function ParentPortalPage() {
     );
   }
 
+  // Formulaire de connexion
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm">
