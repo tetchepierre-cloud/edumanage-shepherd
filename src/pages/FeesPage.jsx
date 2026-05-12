@@ -626,20 +626,22 @@ export default function FeesPage() {
         <div className={`px-4 py-3 rounded-lg text-sm font-medium ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-green-500">
-          <p className="text-sm text-gray-500 font-medium">Fully Paid</p>
-          <p className="text-2xl font-bold text-green-600 mt-1">{formatAmount(totalCollected)}</p>
+      <CanSee module="fees" section="summary" element="Status cards">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-green-500">
+            <p className="text-sm text-gray-500 font-medium">Fully Paid</p>
+            <p className="text-2xl font-bold text-green-600 mt-1">{formatAmount(totalCollected)}</p>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-yellow-500">
+            <p className="text-sm text-gray-500 font-medium">Pending</p>
+            <p className="text-2xl font-bold text-yellow-600 mt-1">{formatAmount(totalPending)}</p>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-orange-500">
+            <p className="text-sm text-gray-500 font-medium">Partial</p>
+            <p className="text-2xl font-bold text-orange-600 mt-1">{formatAmount(totalPartial)}</p>
+          </div>
         </div>
-        <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-yellow-500">
-          <p className="text-sm text-gray-500 font-medium">Pending</p>
-          <p className="text-2xl font-bold text-yellow-600 mt-1">{formatAmount(totalPending)}</p>
-        </div>
-        <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-orange-500">
-          <p className="text-sm text-gray-500 font-medium">Partial</p>
-          <p className="text-2xl font-bold text-orange-600 mt-1">{formatAmount(totalPartial)}</p>
-        </div>
-      </div>
+      </CanSee>
 
       <div className="bg-white rounded-xl shadow-sm p-4 flex flex-wrap gap-3">
         <CanSee module="fees" section="filters" element="Search field">
