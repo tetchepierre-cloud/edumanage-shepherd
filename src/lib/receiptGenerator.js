@@ -1,5 +1,5 @@
 // src/lib/receiptGenerator.js
-import { jsPDF } from 'jspdf'
+import { jsPDF, GState } from 'jspdf'
 import { supabase } from './supabase'
 
 // ── Mise en page A5 ───────────────────────────────────────────────────────────
@@ -115,6 +115,13 @@ export async function printReceipt(payment, schoolConfig = {}) {
     }
   }
 
+  // ── Filigrane : logo de l'école en fond très discret, taille doublée ──────
+  if (logoData) {
+    doc.setGState(new GState({ opacity: 0.05 }))
+    doc.addImage(logoData, 'PNG', A5_W / 2 - 50, A5_H / 2 - 50, 100, 100)
+    doc.setGState(new GState({ opacity: 1 }))
+  }
+
   const student         = payment.students || {}
   const className       = student.classes?.name || '—'
   const studentName     = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '—'
@@ -125,14 +132,21 @@ export async function printReceipt(payment, schoolConfig = {}) {
   const notes           = payment.notes          || ''
   const amountPaidToday = parseFloat(payment.amount || 0)
 
-  // Lignes de frais du jour (toujours avec expected/paid)
+  // Lignes de frais du jour
   let feeItems = Array.isArray(payment.feeItems) && payment.feeItems.length > 0
-    ? payment.feeItems.map(item => ({ description: item.description || item.type || 'Tuition', expected: parseFloat(item.expected || item.amount || 0), paid: parseFloat(item.paid || item.amount || 0) }))
+    ? payment.feeItems.map(item => ({
+        description: item.description || item.type || 'Tuition',
+        expected: parseFloat(item.expected || item.amount || 0),
+        paid: parseFloat(item.paid || item.amount || 0)
+      }))
     : [{ description: (payment.payment_type || 'Tuition') + ' (' + year + ')', expected: amountPaidToday, paid: amountPaidToday }]
 
-  // Calcul du solde restant (simple, basé sur historique)
+  // Calcul du solde restant
   const annualStructure = await getAnnualFeeStructure(student, year)
-  const { data: discounts } = await supabase.from('student_fee_discounts').select('fee_structure_id, discount_type, discount_value').eq('student_id', payment.student_id)
+  const { data: discounts } = await supabase
+    .from('student_fee_discounts')
+    .select('fee_structure_id, discount_type, discount_value')
+    .eq('student_id', payment.student_id)
   const discountMap = {}
   ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
   const adjustedStructure = annualStructure.map(f => {
@@ -151,12 +165,12 @@ export async function printReceipt(payment, schoolConfig = {}) {
 
   let y = 0
 
-  // 1. HEADER (logo agrandi ou icône par défaut)
+  // 1. HEADER
   fillRect(doc, 0, 0, A5_W, 30, BLUE)
   if (logoData) {
-    const logoSize = 18   // 22,5 × 0,8
+    const logoSize = 18
     doc.addImage(logoData, 'JPEG', M + 2, 8, logoSize, logoSize)
-    const textX = M + 2 + logoSize + 2   // démarre après le logo
+    const textX = M + 2 + logoSize + 2
     text(doc, school.name, textX, 10, { size: 10, style: 'bold', color: WHITE })
     text(doc, school.address + (school.phone ? '  |  Tel: ' + school.phone : ''), textX, 16, { size: 7, color: [180, 210, 245] })
     if (school.email) text(doc, school.email, textX, 22, { size: 6.5, color: [180, 210, 245] })
@@ -203,7 +217,6 @@ export async function printReceipt(payment, schoolConfig = {}) {
   text(doc, 'THIS PAYMENT', M, y + 4, { size: 7.5, style: 'bold', color: BLUE })
   y += 6
 
-  // En-têtes : Description | Expected | Paid
   fillRect(doc, M, y, CW, 6.5, BLUE)
   text(doc, 'Description', M + 2, y + 4.5, { size: 8, style: 'bold', color: WHITE })
   text(doc, 'Expected', M + CW * 0.55, y + 4.5, { size: 8, style: 'bold', color: WHITE })
@@ -227,7 +240,6 @@ export async function printReceipt(payment, schoolConfig = {}) {
   text(doc, fmtGHS(amountPaidToday), A5_W - M - 2, paidY + 6, { size: 10, style: 'bold', color: GREEN, align: 'right' })
   paidY += 11
 
-  // Ligne Balance Remaining (après le total payé)
   if (totalBalance > 0) {
     text(doc, 'Balance Remaining:', M + 2, paidY + 5, { size: 8, style: 'bold', color: AMBER })
     text(doc, fmtGHS(totalBalance), A5_W - M - 2, paidY + 5, { size: 8, style: 'bold', color: AMBER, align: 'right' })
@@ -236,14 +248,16 @@ export async function printReceipt(payment, schoolConfig = {}) {
 
   y = paidY + 4
 
-  // 5. NOTES (si présentes)
+  // 5. NOTES
   if (notes) {
     text(doc, 'Note: ' + notes, M, y + 3, { size: 7, color: DGRAY, maxWidth: CW })
     y += 8
   }
 
-  // 6. SIGNATURE + Thank you
-  y = Math.max(y, A5_H - 32)
+  // 6. SIGNATURE (remontée) + Thank you fixe
+  const signatureY = A5_H - 74
+  y = signatureY
+
   hline(doc, y, [200, 210, 230], 0.3)
   y += 4
   text(doc, 'Received by:', M, y, { size: 7, style: 'bold', color: DGRAY })
@@ -251,15 +265,19 @@ export async function printReceipt(payment, schoolConfig = {}) {
   text(doc, 'Signature:', M + 45, y, { size: 7, style: 'bold', color: DGRAY })
   doc.setDrawColor(160, 160, 160)
   doc.setLineWidth(0.3)
-  doc.line(M + 60, y + 9, A5_W - M, y + 9)
+  doc.line(M + 60, y + 18, A5_W - M, y + 18)
 
-  // Mention Thank you
-  text(doc, 'Thank you!', A5_W / 2, y + 16, { size: 8, style: 'bold', color: GREEN, align: 'center' })
+  text(doc, 'Thank you for trusting us!', A5_W / 2, A5_H - 28, { size: 8, style: 'bold', color: GREEN, align: 'center' })
 
-  // 7. PIED DE PAGE
-  fillRect(doc, 0, A5_H - 9, A5_W, 9, BLUE)
-  text(doc, 'Computer-generated receipt — valid without stamp.',
-    A5_W / 2, A5_H - 3.5, { size: 6, color: [180, 210, 245], align: 'center' })
+  // 7. PIED DE PAGE (hauteur 4,5 mm, textes centrés verticalement à 2,25 mm du bas)
+  fillRect(doc, 0, A5_H - 4.5, A5_W, 4.5, BLUE)
+  const footerTextY = A5_H - 1.8;  // 2.25 + 0.45 ≈ 1.8 pour un centrage optimal visuel
+  // Partie gauche
+  text(doc, `Generated on ${new Date().toLocaleDateString('en-GB')} — ${school.name}`,
+    M, footerTextY, { size: 6, color: [180, 210, 245], align: 'left' })
+  // Partie droite
+  text(doc, 'Powered by EduManage GH  •  +233 53 877 7840',
+    A5_W - M, footerTextY, { size: 6, color: [180, 210, 245], align: 'right' })
 
   const blob = doc.output('blob')
   window.open(URL.createObjectURL(blob), '_blank')
