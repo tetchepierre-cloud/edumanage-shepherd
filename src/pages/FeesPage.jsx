@@ -31,6 +31,7 @@ export default function FeesPage() {
   const [studentSearch, setStudentSearch] = useState('')
 
   const [feeLines, setFeeLines] = useState([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
+  const [arrears, setArrears] = useState(0)
 
   const addFeeLine = () => setFeeLines(prev => [...prev, { type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
   const removeFeeLine = (idx) => setFeeLines(prev => prev.filter((_, i) => i !== idx))
@@ -45,7 +46,8 @@ export default function FeesPage() {
     payment_method: 'Cash',
     receipt_number: '',
     status:         'paid',
-    academic_year:  '2024/2025',
+    academic_year:  '2025/2026',
+    term:           'Term 1',
     payment_date:   new Date().toISOString().split('T')[0],
     notes:          '',
   })
@@ -68,6 +70,7 @@ export default function FeesPage() {
     customTo: '',
     tableType: '1',
   })
+  const [reportTerm, setReportTerm] = useState('')
 
   const [showStatementModal, setShowStatementModal] = useState(false)
   const [statementSearch, setStatementSearch] = useState('')
@@ -75,12 +78,14 @@ export default function FeesPage() {
   const [statementParams, setStatementParams] = useState({
     academicYear: '2025/2026',
     periodType: '1',
+    term: '',
     customFrom: '',
     customTo: '',
   })
 
   const [showDiscountReportModal, setShowDiscountReportModal] = useState(false)
   const [discountReportYear, setDiscountReportYear] = useState('2025/2026')
+  const [discountReportTerm, setDiscountReportTerm] = useState('') // ← ajouté
 
   const [showClassBalanceModal, setShowClassBalanceModal] = useState(false)
   const [selectedBalanceClass, setSelectedBalanceClass] = useState('')
@@ -154,7 +159,9 @@ export default function FeesPage() {
     )
   }
 
-  const getExpectedFeeItems = async (studentId, academicYear) => {
+  // === FONCTIONS MODIFIÉES POUR LE TERME ===
+
+  const getExpectedFeeItems = async (studentId, academicYear, term) => {
     const { data: student, error: studentErr } = await supabase
       .from('students')
       .select('class_id, classes(name)')
@@ -172,19 +179,22 @@ export default function FeesPage() {
       .ilike('name', levelName)
       .maybeSingle()
     if (levelErr || !levelData) {
-      console.warn('Niveau introuvable pour', levelName)
+      console.warn('Niveau introuvable pour', levelName, 'levelData:', levelData, 'levelErr:', levelErr)
       return []
     }
     const levelId = levelData.id
-    const { data: fees, error: feesErr } = await supabase
+    let query = supabase
       .from('fee_structure')
       .select('id, fee_name, fee_type, amount, is_mandatory, required_for_admission')
       .eq('level_id', levelId)
       .eq('academic_year', academicYear)
       .eq('is_active', true)
-      .order('is_mandatory', { ascending: false })
+    if (term) {
+      query = query.eq('term', term)
+    }
+    const { data: fees, error: feesErr } = await query.order('is_mandatory', { ascending: false })
     if (feesErr || !fees || fees.length === 0) {
-      console.warn('Aucun frais trouvé pour level_id', levelId, 'et année', academicYear)
+      console.warn('Aucun frais trouvé pour level_id', levelId, 'et année', academicYear, 'et terme', term)
       return []
     }
     const { data: discounts } = await supabase
@@ -216,14 +226,15 @@ export default function FeesPage() {
     })
   }
 
-  const getRemainingFeesForStudent = async (studentId, academicYear) => {
-    const feeStructure = await getExpectedFeeItems(studentId, academicYear)
+  const getRemainingFeesForStudent = async (studentId, academicYear, term) => {
+    const feeStructure = await getExpectedFeeItems(studentId, academicYear, term)
     if (!feeStructure.length) return []
     const { data: payments } = await supabase
       .from('fee_payments')
       .select('amount, payment_type, fee_items, status')
       .eq('student_id', studentId)
       .eq('academic_year', academicYear)
+      .eq('term', term)
       .in('status', ['paid', 'partial'])
     const paidByType = {}
     ;(payments || []).forEach(p => {
@@ -253,7 +264,19 @@ export default function FeesPage() {
     })
   }
 
-  const updateStudentActiveStatus = async (studentId, academicYear) => {
+  const getPreviousTermsArrears = async (studentId, academicYear, currentTerm) => {
+    const allTerms = ['Term 1', 'Term 2', 'Term 3']
+    const currentIndex = allTerms.indexOf(currentTerm)
+    if (currentIndex <= 0) return 0
+    let totalArrears = 0
+    for (let i = 0; i < currentIndex; i++) {
+      const remaining = await getRemainingFeesForStudent(studentId, academicYear, allTerms[i])
+      totalArrears += remaining.reduce((sum, r) => sum + r.remaining, 0)
+    }
+    return totalArrears
+  }
+
+  const updateStudentActiveStatus = async (studentId, academicYear, term) => {
     const { data: student } = await supabase
       .from('students')
       .select('min_payment_override, class_id, classes(name)')
@@ -273,6 +296,7 @@ export default function FeesPage() {
       .select('id, amount, fee_name, fee_type')
       .eq('level_id', level?.id)
       .eq('academic_year', academicYear)
+      .eq('term', term)
       .eq('required_for_admission', true)
     if (!fees?.length) {
       await supabase.from('students').update({ active: true }).eq('id', studentId)
@@ -300,6 +324,7 @@ export default function FeesPage() {
       .select('amount, fee_items, payment_type')
       .eq('student_id', studentId)
       .eq('academic_year', academicYear)
+      .eq('term', term)
       .in('status', ['paid', 'partial'])
     let totalPaidRequired = 0
     ;(payments || []).forEach(p => {
@@ -323,6 +348,8 @@ export default function FeesPage() {
     setStudents(prev => prev.map(s => s.id === studentId ? { ...s, active: newActive } : s))
   }
 
+  // === FIN FONCTIONS MODIFIÉES ===
+
   const openAddForm = async () => {
     await fetchStudents()
     setEditPayment(null)
@@ -334,10 +361,12 @@ export default function FeesPage() {
       receipt_number: '',
       status:         'paid',
       academic_year:  '2025/2026',
+      term:           'Term 1',
       payment_date:   new Date().toISOString().split('T')[0],
       notes:          '',
     })
     setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
+    setArrears(0)
     setStudentSearch('')
     setMessage('')
     setShowForm(true)
@@ -352,7 +381,8 @@ export default function FeesPage() {
       payment_method: payment.payment_method || 'Cash',
       receipt_number: payment.receipt_number || '',
       status:         payment.status         || 'paid',
-      academic_year:  payment.academic_year  || '2024/2025',
+      academic_year:  payment.academic_year  || '2025/2026',
+      term:           payment.term           || 'Term 1',
       payment_date:   payment.payment_date   || new Date().toISOString().split('T')[0],
       notes:          payment.notes          || '',
     })
@@ -374,7 +404,8 @@ export default function FeesPage() {
   const handlePrintReceipt = async (payment) => {
     const expectedItems = await getExpectedFeeItems(
       payment.student_id,
-      payment.academic_year || '2024/2025',
+      payment.academic_year || '2025/2026',
+      payment.term || 'Term 1'
     )
     let feeItems = []
     const amountPaid = parseFloat(payment.amount || 0)
@@ -420,6 +451,7 @@ export default function FeesPage() {
     setStatementParams({
       academicYear: '2025/2026',
       periodType: '1',
+      term: '',
       customFrom: '',
       customTo: '',
     })
@@ -436,7 +468,7 @@ export default function FeesPage() {
       setSaving(false)
       return
     }
-    const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year)
+    const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
     const validLines = feeLines.filter(l => parseFloat(l.amount) > 0)
     if (validLines.length === 0) {
       setMessage('❌ Add at least one fee item with amount > 0.')
@@ -461,6 +493,7 @@ export default function FeesPage() {
       receipt_number: receiptNum,
       status:         'partial',
       academic_year:  form.academic_year,
+      term:           form.term,
       payment_date:   form.payment_date,
       notes:          form.notes.trim() || null,
       fee_items:      validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
@@ -482,9 +515,9 @@ export default function FeesPage() {
           oldData:     oldPayment,
           newData:     data,
           description: `Updated fee payment — ${data.payment_type} GHS ${data.amount} `
-                     + `(${data.academic_year}) · Receipt: ${data.receipt_number}`,
+                     + `(${data.academic_year}, ${data.term}) · Receipt: ${data.receipt_number}`,
         })
-        await updateStudentActiveStatus(form.student_id, form.academic_year)
+        await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
         setMessage('✅ Payment updated successfully!')
         await fetchPayments()
         setTimeout(() => setShowForm(false), 1200)
@@ -507,9 +540,9 @@ export default function FeesPage() {
           newData:     data,
           description: `Fee payment recorded — ${studentName} · ${data.payment_type} `
                      + `GHS ${data.amount} · ${data.status} · ${data.academic_year} `
-                     + `· Receipt: ${data.receipt_number}`,
+                     + `· ${data.term} · Receipt: ${data.receipt_number}`,
         })
-        await updateStudentActiveStatus(form.student_id, form.academic_year)
+        await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
         const { data: fullPayment } = await supabase
           .from('fee_payments')
           .select('*, students(first_name, last_name, class_id, classes(name))')
@@ -594,6 +627,30 @@ export default function FeesPage() {
   const totalPartial = filtered
     .filter(p => p.status === 'partial')
     .reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
+
+  useEffect(() => {
+    if (form.student_id && form.academic_year && form.term) {
+      getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
+        .then(remaining => {
+          if (remaining && remaining.length > 0) {
+            setFeeLines(remaining.map(r => ({
+              type: r.type,
+              amount: '',
+              max: r.remaining,
+              label: r.label,
+              remaining: r.remaining,
+              locked: true,
+              feeStructureId: r.feeStructureId
+            })))
+          } else {
+            setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
+          }
+        })
+      getPreviousTermsArrears(form.student_id, form.academic_year, form.term)
+        .then(total => setArrears(total))
+        .catch(() => setArrears(0))
+    }
+  }, [form.term, form.student_id, form.academic_year])
 
   return (
     <div className="p-6 space-y-6">
@@ -731,11 +788,6 @@ export default function FeesPage() {
         </CanSee>
       </div>
 
-      {/* Modal forms (Report, Statement, Discount, Class Balance) and Add/Edit modal remain conditionally rendered as before */}
-      {/* They are not wrapped with permissions since they are triggered by actions already controlled */}
-      {/* For completeness, the report modals can be wrapped if needed, but they are already based on state */}
-      {/* We keep the existing modal logic unchanged */}
-
       {showForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -752,7 +804,7 @@ export default function FeesPage() {
                   {studentSearch.length > 0 && form.student_id === '' && (
                     <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto top-full">
                       {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).slice(0, 10).map(s => (
-                        <div key={s.id} onClick={async () => { setForm(f => ({ ...f, student_id: s.id })); setStudentSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`); const remaining = await getRemainingFeesForStudent(s.id, form.academic_year); if (remaining && remaining.length > 0) { setFeeLines(remaining.map(r => ({ type: r.type, amount: '', max: r.remaining, label: r.label, remaining: r.remaining, locked: true, feeStructureId: r.feeStructureId }))) } else { setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }]) } }} className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0">
+                        <div key={s.id} onClick={async () => { setForm(f => ({ ...f, student_id: s.id })); setStudentSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`); const remaining = await getRemainingFeesForStudent(s.id, form.academic_year, form.term); if (remaining && remaining.length > 0) { setFeeLines(remaining.map(r => ({ type: r.type, amount: '', max: r.remaining, label: r.label, remaining: r.remaining, locked: true, feeStructureId: r.feeStructureId }))) } else { setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }]) } }} className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0">
                           <span className="font-medium">{s.first_name} {s.last_name}</span><span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span>
                         </div>
                       ))}
@@ -760,6 +812,22 @@ export default function FeesPage() {
                     </div>
                   )}
                   {form.student_id && (<div className="mt-1 text-xs text-green-600 font-medium">✓ Student selected</div>)}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+                    <select value={form.academic_year} onChange={e => setForm(f => ({ ...f, academic_year: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                      {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Term</label>
+                    <select value={form.term} onChange={e => setForm(f => ({ ...f, term: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                      <option value="Term 1">Term 1</option>
+                      <option value="Term 2">Term 2</option>
+                      <option value="Term 3">Term 3</option>
+                    </select>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Fee Items</label>
@@ -779,25 +847,23 @@ export default function FeesPage() {
                   <div className="mt-2 text-right"><span className="text-sm font-bold text-gray-700">Total remaining: {formatAmount(feeLines.reduce((sum, l) => sum + (l.max || 0), 0))}</span></div>
                   <button type="button" onClick={addFeeLine} className="mt-1 text-blue-600 hover:text-blue-800 text-sm">+ Add fee line</button>
                 </div>
+                {arrears > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+                    ⚠️ Outstanding balance from previous terms: <strong>{formatAmount(arrears)}</strong>
+                    <br /><span className="text-xs">This amount is not included in the current term fees and must be settled separately.</span>
+                  </div>
+                )}
                 <div className="bg-gray-50 rounded-lg p-3 text-right">
                   <span className="text-sm font-semibold text-gray-700">Total: </span>
                   <span className="text-lg font-bold text-blue-600">{formatAmount(feeLines.reduce((sum, l) => sum + parseFloat(l.amount || 0), 0))}</span>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
                     <select value={form.payment_method} onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
                       {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                    <select value={form.academic_year} onChange={e => setForm(f => ({ ...f, academic_year: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                      {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label>
                     <input type="date" value={form.payment_date} onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
@@ -829,9 +895,6 @@ export default function FeesPage() {
         </div>
       )}
 
-      {/* Other modals: Report, Statement, Discount, Class Balance are left as they were, without permissions since they are triggered from buttons already gated */}
-      {/* They can be accessed if the user has the button visible. No additional changes needed. */}
-
       {showReportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
@@ -844,6 +907,15 @@ export default function FeesPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
                 <select value={reportParams.academicYear} onChange={e => setReportParams({ ...reportParams, academicYear: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
                   {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
+                <select value={reportTerm} onChange={e => setReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="">All Terms</option>
+                  <option value="Term 1">Term 1</option>
+                  <option value="Term 2">Term 2</option>
+                  <option value="Term 3">Term 3</option>
                 </select>
               </div>
               <div>
@@ -901,6 +973,7 @@ export default function FeesPage() {
                     tableType: reportParams.tableType === '2' ? 'student' : 'class',
                     schoolConfig,
                     showOnlyActive,
+                    term: reportTerm || null,
                   })
                 }} className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium text-sm">Generate Report</button>
               </div>
@@ -949,15 +1022,27 @@ export default function FeesPage() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label>
-                    <select value={statementParams.periodType} onChange={e => setStatementParams({ ...statementParams, periodType: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                      <option value="1">Full Academic Year</option><option value="2">Term</option><option value="3">Custom</option>
+                    <select
+                      value={statementParams.periodType}
+                      onChange={e => setStatementParams({ ...statementParams, periodType: e.target.value, term: e.target.value === '2' ? 'Term 1' : '' })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="1">Full Academic Year</option>
+                      <option value="2">Term</option>
+                      <option value="3">Custom</option>
                     </select>
                   </div>
                   {statementParams.periodType === '2' && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Term</label>
-                      <select value={statementParams.term || 'T1'} onChange={e => setStatementParams({ ...statementParams, term: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                        <option value="T1">Term 1</option><option value="T2">Term 2</option><option value="T3">Term 3</option>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Select Term</label>
+                      <select
+                        value={statementParams.term || 'Term 1'}
+                        onChange={e => setStatementParams({ ...statementParams, term: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      >
+                        <option value="Term 1">Term 1</option>
+                        <option value="Term 2">Term 2</option>
+                        <option value="Term 3">Term 3</option>
                       </select>
                     </div>
                   )}
@@ -971,10 +1056,53 @@ export default function FeesPage() {
                     <button type="button" onClick={() => setShowStatementModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
                     <button type="button" onClick={async () => {
                       let period = 'full', customFrom = null, customTo = null
-                      if (statementParams.periodType === '2') period = statementParams.term || 'T1'
-                      else if (statementParams.periodType === '3') { period = 'custom'; customFrom = statementParams.customFrom; customTo = statementParams.customTo }
-                      setShowStatementModal(false)
-                      await generateStudentStatement({ student: statementStudent, academicYear: statementParams.academicYear, period, customFrom, customTo, schoolConfig })
+                      const selectedTerm = statementParams.term || null
+                      if (statementParams.periodType === '2') {
+                        period = selectedTerm || 'T1'
+                        let arrearsAmount = 0
+                        if (selectedTerm && statementStudent) {
+                          const allTerms = ['Term 1', 'Term 2', 'Term 3']
+                          const idx = allTerms.indexOf(selectedTerm)
+                          if (idx > 0) {
+                            for (let i = 0; i < idx; i++) {
+                              const remaining = await getRemainingFeesForStudent(statementStudent.id, statementParams.academicYear, allTerms[i])
+                              arrearsAmount += remaining.reduce((sum, r) => sum + r.remaining, 0)
+                            }
+                          }
+                        }
+                        setShowStatementModal(false)
+                        await generateStudentStatement({
+                          student: statementStudent,
+                          academicYear: statementParams.academicYear,
+                          period,
+                          customFrom: null,
+                          customTo: null,
+                          schoolConfig,
+                          term: selectedTerm,
+                          arrears: arrearsAmount,
+                        })
+                      } else if (statementParams.periodType === '3') {
+                        period = 'custom'
+                        customFrom = statementParams.customFrom
+                        customTo = statementParams.customTo
+                        setShowStatementModal(false)
+                        await generateStudentStatement({
+                          student: statementStudent,
+                          academicYear: statementParams.academicYear,
+                          period,
+                          customFrom,
+                          customTo,
+                          schoolConfig,
+                        })
+                      } else {
+                        setShowStatementModal(false)
+                        await generateStudentStatement({
+                          student: statementStudent,
+                          academicYear: statementParams.academicYear,
+                          period,
+                          schoolConfig,
+                        })
+                      }
                     }} className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm">Generate Statement</button>
                   </div>
                 </>
@@ -994,15 +1122,38 @@ export default function FeesPage() {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                <select value={discountReportYear} onChange={e => setDiscountReportYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  <option value="2024/2025">2024/2025</option><option value="2025/2026">2025/2026</option><option value="2026/2027">2026/2027</option>
+                <select
+                  value={discountReportYear}
+                  onChange={e => setDiscountReportYear(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="2024/2025">2024/2025</option>
+                  <option value="2025/2026">2025/2026</option>
+                  <option value="2026/2027">2026/2027</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
+                <select
+                  value={discountReportTerm}
+                  onChange={e => setDiscountReportTerm(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="">All Terms</option>
+                  <option value="Term 1">Term 1</option>
+                  <option value="Term 2">Term 2</option>
+                  <option value="Term 3">Term 3</option>
                 </select>
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowDiscountReportModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
                 <button type="button" onClick={async () => {
                   setShowDiscountReportModal(false)
-                  await generateDiscountReport({ academicYear: discountReportYear, schoolConfig })
+                  await generateDiscountReport({
+                    academicYear: discountReportYear,
+                    schoolConfig,
+                    term: discountReportTerm || null,
+                  })
                 }} className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium text-sm">Generate</button>
               </div>
             </div>

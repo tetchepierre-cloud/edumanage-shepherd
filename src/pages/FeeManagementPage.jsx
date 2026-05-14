@@ -1,6 +1,4 @@
 // src/pages/FeeManagementPage.jsx
-// Ajout de "required_for_admission" (colonne, formulaire, chargement)
-
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import {
@@ -29,14 +27,14 @@ const EMPTY_FEE_FORM = {
   amount: '',
   is_mandatory: true,
   is_active: true,
-  required_for_admission: false,   // <-- ajouté
+  required_for_admission: false,
+  term: 'Term 1', // ← ajouté
 };
 
 export default function FeeManagementPage() {
   return <FeeStructureTab />;
 }
 
-// ─── TAB: FEE STRUCTURE ────────────────────────────────────────────────────
 function FeeStructureTab() {
   const [levels, setLevels]               = useState([]);
   const [academicYears, setAcademicYears] = useState([]);
@@ -116,10 +114,10 @@ function FeeStructureTab() {
     setLoading(true);
     const { data, error } = await supabase
       .from('fee_structure')
-      .select('id, fee_name, fee_type, amount, is_mandatory, is_active, required_for_admission, academic_year, levels(name)')
+      .select('id, fee_name, fee_type, amount, is_mandatory, is_active, required_for_admission, academic_year, term, levels(name)')
       .eq('level_id', level)
       .eq('academic_year', year)
-      .order('is_mandatory', { ascending: false })
+      .order('term')
       .order('fee_name');
     if (!error) setFees(data || []);
     setLoading(false);
@@ -260,58 +258,78 @@ function FeeStructureTab() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                {['Fee Name','Type','Amount','Mandatory','Admission','Status','Actions'].map(h => (
+                {['Fee Name','Type','Term','Amount','Mandatory','Admission','Status','Actions'].map(h => (
                   <th key={h} className={`text-xs font-semibold text-gray-500 uppercase px-6 py-3 ${h === 'Amount' ? 'text-right' : h === 'Mandatory' || h === 'Admission' || h === 'Status' || h === 'Actions' ? 'text-center' : 'text-left'}`}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {fees.map(fee => (
-                <tr key={fee.id} className={`hover:bg-gray-50 transition-colors ${!fee.is_active ? 'opacity-50' : ''}`}>
-                  <td className="px-6 py-4 font-medium text-gray-900">{fee.fee_name}</td>
-                  <td className="px-6 py-4">
-                    <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${FEE_TYPE_COLORS[fee.fee_type] || FEE_TYPE_COLORS.other}`}>
-                      {FEE_TYPE_LABELS[fee.fee_type] || fee.fee_type}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right font-semibold text-gray-900">
-                    GHS {Number(fee.amount).toLocaleString('en-GH', { minimumFractionDigits: 2 })}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    {fee.is_mandatory
-                      ? <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Required</span>
-                      : <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">Optional</span>}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    {fee.required_for_admission
-                      ? <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">Yes</span>
-                      : <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">No</span>}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <button onClick={() => handleToggleActive(fee)}
-                      className={`inline-flex px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                        fee.is_active ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                      {fee.is_active ? 'Active' : 'Inactive'}
-                    </button>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center justify-end gap-2">
-                      <button onClick={() => { setEditingFee(fee); setShowModal(true); }}
-                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                        <PencilIcon className="h-4 w-4" />
-                      </button>
-                      <button onClick={() => handleDelete(fee)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                        <TrashIcon className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+  {(() => {
+    let lastTerm = null;
+    const rows = [];
+    fees.forEach((fee, index) => {
+      const isFirstOfTerm = fee.term !== lastTerm;
+      lastTerm = fee.term;
+
+      // Insère une ligne vide de séparation avant le nouveau groupe (sauf tout premier)
+      if (isFirstOfTerm && rows.length > 0) {
+        rows.push(
+          <tr key={`sep-${fee.term}`} className="h-3 bg-gray-50">
+            <td colSpan={8} className="p-0" />
+          </tr>
+        );
+      }
+
+      rows.push(
+        <tr key={fee.id} className={`hover:bg-gray-50 transition-colors ${!fee.is_active ? 'opacity-50' : ''}`}>
+          <td className="px-6 py-4 font-medium text-gray-900">{fee.fee_name}</td>
+          <td className="px-6 py-4">
+            <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${FEE_TYPE_COLORS[fee.fee_type] || FEE_TYPE_COLORS.other}`}>
+              {FEE_TYPE_LABELS[fee.fee_type] || fee.fee_type}
+            </span>
+          </td>
+          <td className="px-6 py-4 text-gray-700 text-sm">{fee.term || '—'}</td>
+          <td className="px-6 py-4 text-right font-semibold text-gray-900">
+            GHS {Number(fee.amount).toLocaleString('en-GH', { minimumFractionDigits: 2 })}
+          </td>
+          <td className="px-6 py-4 text-center">
+            {fee.is_mandatory
+              ? <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Required</span>
+              : <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">Optional</span>}
+          </td>
+          <td className="px-6 py-4 text-center">
+            {fee.required_for_admission
+              ? <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">Yes</span>
+              : <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">No</span>}
+          </td>
+          <td className="px-6 py-4 text-center">
+            <button onClick={() => handleToggleActive(fee)}
+              className={`inline-flex px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                fee.is_active ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+              {fee.is_active ? 'Active' : 'Inactive'}
+            </button>
+          </td>
+          <td className="px-6 py-4">
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => { setEditingFee(fee); setShowModal(true); }}
+                className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                <PencilIcon className="h-4 w-4" />
+              </button>
+              <button onClick={() => handleDelete(fee)}
+                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                <TrashIcon className="h-4 w-4" />
+              </button>
+            </div>
+          </td>
+        </tr>
+      );
+    });
+    return rows;
+  })()}
+</tbody>
             <tfoot className="bg-gray-50 border-t-2 border-gray-200">
               <tr>
-                <td colSpan={2} className="px-6 py-3 text-sm font-semibold text-gray-700">Total (active fees)</td>
+                <td colSpan={3} className="px-6 py-3 text-sm font-semibold text-gray-700">Total (active fees)</td>
                 <td className="px-6 py-3 text-right font-bold text-gray-900">
                   GHS {(totalMandatory + totalOptional).toLocaleString('en-GH', { minimumFractionDigits: 2 })}
                 </td>
@@ -346,6 +364,7 @@ function FeeFormModal({ fee, levelName, academicYear, onSave, onClose }) {
           is_mandatory: fee.is_mandatory,
           is_active: fee.is_active,
           required_for_admission: fee.required_for_admission || false,
+          term: fee.term || 'Term 1', // ← ajouté
         }
       : EMPTY_FEE_FORM
   );
@@ -393,6 +412,16 @@ function FeeFormModal({ fee, levelName, academicYear, onSave, onClose }) {
             <select value={form.fee_type} onChange={e => setForm({ ...form, fee_type: e.target.value })}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
               {FEE_TYPES.map(t => <option key={t} value={t}>{FEE_TYPE_LABELS[t]}</option>)}
+            </select>
+          </div>
+          {/* Sélecteur de Terme ajouté */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Term</label>
+            <select value={form.term} onChange={e => setForm({ ...form, term: e.target.value })}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+              <option value="Term 1">Term 1</option>
+              <option value="Term 2">Term 2</option>
+              <option value="Term 3">Term 3</option>
             </select>
           </div>
           <div>

@@ -1,58 +1,24 @@
 // src/lib/statementGenerator.js
-// Relevé de Compte Élève — conforme à la maquette EduManage GH
-// Utilise désormais la date de paiement réelle pour les filtres et l'affichage
+// Relevé de Compte Élève — avec support du Terme
 
 import { jsPDF } from 'jspdf'
 import { supabase } from './supabase'
 
-// ── Mise en page A4 ──────────────────────────────────────────────────────────
 const A4_W = 210, A4_H = 297, M = 12, CW = A4_W - M * 2
 
-// ── Couleurs ─────────────────────────────────────────────────────────────────
-const BLUE    = [30,  77,  145]
-const BLUE_LT = [214, 228, 247]
-const LGRAY   = [245, 247, 250]
-const MGRAY   = [226, 232, 240]
-const DGRAY   = [107, 114, 128]
-const BLACK   = [17,  24,  39]
-const GREEN   = [22,  101, 52]
-const GREEN_L = [220, 252, 231]
-const AMBER   = [146, 64,  14]
-const AMBER_L = [254, 243, 199]
-const RED     = [153, 27,  27]
-const RED_L   = [254, 226, 226]
-const WHITE   = [255, 255, 255]
-const GOLD    = [255, 215, 0]
+const BLUE    = [30, 77, 145], BLUE_LT = [214, 228, 247], LGRAY   = [245, 247, 250]
+const MGRAY   = [226, 232, 240], DGRAY   = [107, 114, 128], BLACK   = [17, 24, 39]
+const GREEN   = [22, 101, 52],  GREEN_L = [220, 252, 231], AMBER   = [146, 64, 14]
+const AMBER_L = [254, 243, 199], RED     = [153, 27, 27],  RED_L   = [254, 226, 226]
+const WHITE   = [255, 255, 255], GOLD    = [255, 215, 0]
 
-// ── Primitives graphiques ────────────────────────────────────────────────────
-function fillRect(doc, x, y, w, h, color) {
-  doc.setFillColor(...color)
-  doc.rect(x, y, w, h, 'F')
-}
-function strokeRect(doc, x, y, w, h, color, lw = 0.2) {
-  doc.setDrawColor(...color)
-  doc.setLineWidth(lw)
-  doc.rect(x, y, w, h, 'S')
-}
-function hline(doc, y, x1, x2, color = MGRAY, lw = 0.2) {
-  doc.setDrawColor(...color)
-  doc.setLineWidth(lw)
-  doc.line(x1, y, x2, y)
-}
-function txt(doc, str, x, y, opts = {}) {
-  doc.setTextColor(...(opts.color || BLACK))
-  doc.setFontSize(opts.size || 8)
-  doc.setFont('helvetica', opts.style || 'normal')
-  doc.text(String(str ?? ''), x, y, { align: opts.align || 'left', maxWidth: opts.maxWidth })
-}
-function ghs(n) {
-  return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', { minimumFractionDigits: 2 })
-}
-function fmtD(d) {
-  return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-}
+function fillRect(doc, x, y, w, h, color) { doc.setFillColor(...color); doc.rect(x, y, w, h, 'F') }
+function strokeRect(doc, x, y, w, h, color, lw = 0.2) { doc.setDrawColor(...color); doc.setLineWidth(lw); doc.rect(x, y, w, h, 'S') }
+function hline(doc, y, x1, x2, color = MGRAY, lw = 0.2) { doc.setDrawColor(...color); doc.setLineWidth(lw); doc.line(x1, y, x2, y) }
+function txt(doc, str, x, y, opts = {}) { doc.setTextColor(...(opts.color || BLACK)); doc.setFontSize(opts.size || 8); doc.setFont('helvetica', opts.style || 'normal'); doc.text(String(str ?? ''), x, y, { align: opts.align || 'left', maxWidth: opts.maxWidth }) }
+function ghs(n) { return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', { minimumFractionDigits: 2 }) }
+function fmtD(d) { return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) }
 
-// ── Résolution de la période ─────────────────────────────────────────────────
 function resolvePeriod(academicYear, period) {
   const y0 = parseInt(academicYear.split('/')[0])
   const map = {
@@ -64,8 +30,7 @@ function resolvePeriod(academicYear, period) {
   return map[period] || map.full
 }
 
-// ── Total attendu par élève (basé sur l'échéancier) ─────────────────────────
-async function getExpectedTotalForStudent(student, academicYear, dateTo) {
+async function getExpectedTotalForStudent(student, academicYear, dateTo, term) {
   const className = (student.classes?.name || '').trim()
   if (!className) return { total: 0, hasSchedule: false }
 
@@ -78,15 +43,18 @@ async function getExpectedTotalForStudent(student, academicYear, dateTo) {
     .maybeSingle()
   if (!level) return { total: 0, hasSchedule: false }
 
-  const { data: fees } = await supabase
+  let feeQuery = supabase
     .from('fee_structure')
     .select('id')
     .eq('level_id', level.id)
     .eq('academic_year', academicYear)
     .eq('is_active', true)
+
+  if (term) feeQuery = feeQuery.eq('term', term)
+
+  const { data: fees } = await feeQuery
   if (!fees?.length) return { total: 0, hasSchedule: false }
 
-  // Récupérer les réductions de l'élève
   const { data: discounts } = await supabase
     .from('student_fee_discounts')
     .select('fee_structure_id, discount_type, discount_value')
@@ -121,9 +89,6 @@ async function getExpectedTotalForStudent(student, academicYear, dateTo) {
   return { total: parseFloat(total.toFixed(2)), hasSchedule: schedules && schedules.length > 0 }
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// FONCTION PRINCIPALE — generateStudentStatement
-// ════════════════════════════════════════════════════════════════════════════
 export async function generateStudentStatement({
   student,
   academicYear  = '2025/2026',
@@ -131,10 +96,11 @@ export async function generateStudentStatement({
   customFrom    = null,
   customTo      = null,
   schoolConfig  = {},
+  term          = null,
+  arrears       = 0,
 }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
 
-  // ── 0. Période ────────────────────────────────────────────────────────────
   let dateFrom, dateTo, periodLabel
   if (period === 'custom' && customFrom && customTo) {
     dateFrom    = new Date(customFrom)
@@ -145,34 +111,33 @@ export async function generateStudentStatement({
     dateFrom = r.from; dateTo = r.to; periodLabel = r.label
   }
 
-  // ── 0b. Infos école ───────────────────────────────────────────────────────
   const school = {
     name:    (schoolConfig.school_name || 'BRIGHT FUTURE SCHOOL').toUpperCase(),
     address: schoolConfig.address || 'Tamale, Northern Region',
     phone:   schoolConfig.phone   || '+233 20 000 0000',
     email:   schoolConfig.email   || '',
-    logo:    schoolConfig.logo    || null,    // ← ajouté
+    logo:    schoolConfig.logo    || null,
   }
   const studentName = `${student.first_name || ''} ${student.last_name || ''}`.trim()
 
-  // ── 0c. Total attendu (basé sur l'échéancier) ────────────────────────────
-  const { total: expected, hasSchedule } = await getExpectedTotalForStudent(student, academicYear, dateTo)
+  const { total: expected, hasSchedule } = await getExpectedTotalForStudent(student, academicYear, dateTo, term)
 
-  // ── 0d. Paiements réels de la période (filtre par date de paiement réelle) ──
-  const { data: allPayments } = await supabase
+  let paymentQuery = supabase
     .from('fee_payments')
     .select('*')
     .eq('student_id', student.id)
     .eq('academic_year', academicYear)
     .in('status', ['paid', 'partial'])
-    .order('created_at', { ascending: true })
+
+  if (term) paymentQuery = paymentQuery.eq('term', term)
+
+  const { data: allPayments } = await paymentQuery.order('created_at', { ascending: true })
 
   const payments = (allPayments || []).filter(p => {
     const effectiveDate = p.payment_date ? new Date(p.payment_date) : new Date(p.created_at)
     return effectiveDate >= dateFrom && effectiveDate <= new Date(dateTo.getTime() + 86399999)
   })
 
-  // ── 0e. Construction des lignes (paiements, avec ventilation des multiples) ──
   const rows = []
   const seen = new Set()
   function addRow(r) {
@@ -205,21 +170,15 @@ export async function generateStudentStatement({
 
   rows.sort((a, b) => a.date - b.date || (a.type === 'expected' ? -1 : 1))
 
-  // total payé de la période sélectionnée (pour le KPI)
   const totalPaid = (payments || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0)
   const outstanding = parseFloat((expected - totalPaid).toFixed(2))
 
-  // ── Solde cumulatif (après chaque paiement) ────────────────────────────────
   let runningBalance = expected
   const finalRows = rows.map(r => {
     runningBalance = parseFloat((runningBalance - r.paid).toFixed(2))
     return { ...r, balance: runningBalance }
   })
 
-  // ═════════════════════════════════════════════════════════════════════════
-  // DESSIN DU PDF
-  // ═════════════════════════════════════════════════════════════════════════
-    // Charger le logo si disponible
   let logoData = null
   if (school.logo) {
     try {
@@ -230,13 +189,10 @@ export async function generateStudentStatement({
         reader.onloadend = () => resolve(reader.result)
         reader.readAsDataURL(blob)
       })
-    } catch (e) {
-      console.warn('Logo could not be loaded for statement.')
-    }
+    } catch (e) {}
   }
   let y = 0
 
-    // En-tête
   fillRect(doc, 0, 0, A4_W, 28, BLUE)
   if (logoData) {
     const logoSize = 18
@@ -253,10 +209,10 @@ export async function generateStudentStatement({
     txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), M + 20, 17, { size: 7.5, color: [190, 215, 245] })
     if (school.email) txt(doc, school.email, M + 20, 23, { size: 7, color: [190, 215, 245] })
   }
-  txt(doc, 'STUDENT ACCOUNT STATEMENT', A4_W - M, 25, { size: 9, style: 'bold', color: GOLD, align: 'right' })
+  const title = term ? `STUDENT ACCOUNT STATEMENT — ${term}` : 'STUDENT ACCOUNT STATEMENT'
+  txt(doc, title, A4_W - M, 25, { size: 9, style: 'bold', color: GOLD, align: 'right' })
   y = 32
 
-  // Blocs info
   const halfW = (CW / 2) - 2
   const col2X = M + halfW + 4
 
@@ -284,10 +240,10 @@ export async function generateStudentStatement({
     ['Date to',        fmtD(dateTo)],
     ['Generated on',   fmtD(new Date())],
   ]
+  if (term) periods.splice(1, 0, ['Term', term])
   periods.forEach(([label, val]) => { txt(doc, label + ' :', col2X + 3, iy, { size: 7.5, style: 'bold', color: DGRAY }); txt(doc, val, col2X + 26, iy, { size: 7.5, color: BLACK }); iy += 7 })
   y += 38
 
-  // Bandeau des totaux (Expected, Paid, Outstanding)
   const kpiW  = (CW / 3) - 1.5
   const kpis  = [
     { label: 'Total Expected',      value: hasSchedule ? ghs(expected) : 'N/A',         bg: BLUE_LT,  border: BLUE,  vc: BLUE  },
@@ -303,20 +259,19 @@ export async function generateStudentStatement({
   })
   y += 20
 
-  // Tableau des paiements
-  const colDate = 24
-  const colNum  = 27
-  const colDesc = CW - colDate - 3 * colNum   // ← colNum est déjà connu
-  const cols     = [colDate, colDesc, colNum, colNum, colNum]
-  const colX     = [
-    M,
-    M + colDate,
-    M + colDate + colDesc,
-    M + colDate + colDesc + colNum,
-    M + colDate + colDesc + colNum * 2,
-  ]
-  const headers  = ['Date', 'Description', 'Expected', 'Paid', 'Balance']
-  const hAligns  = ['left','left','right','right','right']
+  if (term && arrears > 0) {
+    fillRect(doc, M, y, CW, 6, RED_L)
+    strokeRect(doc, M, y, CW, 6, RED, 0.5)
+    txt(doc, `Arrears from previous terms: ${ghs(arrears)}`, M + CW / 2, y + 3.5, { size: 8, style: 'bold', color: RED, align: 'center' })
+    y += 8
+  }
+
+  // Tableau sans la colonne Expected
+  const colDate = 24, colNum  = 30, colDesc = CW - colDate - 2 * colNum
+  const cols     = [colDate, colDesc, colNum, colNum]
+  const colX     = [M, M + colDate, M + colDate + colDesc, M + colDate + colDesc + colNum]
+  const headers  = ['Date', 'Description', 'Paid', 'Balance']
+  const hAligns  = ['left','left','right','right']
 
   fillRect(doc, M, y, CW, 7, BLUE)
   strokeRect(doc, M, y, CW, 7, BLUE)
@@ -348,31 +303,28 @@ export async function generateStudentStatement({
     })
     txt(doc, fmtD(r.date), colX[0] + 2, y + 4.5, { size: 7, color: BLACK })
     txt(doc, r.description, colX[1] + 2, y + 4.5, { size: 7, color: BLACK, maxWidth: colDesc - 3 })
-    txt(doc, r.expected > 0 ? ghs(r.expected) : '—', colX[2] + cols[2] - 1, y + 4.5, { size: 7, color: r.expected > 0 ? BLACK : [200,200,200], align: 'right' })
-    txt(doc, r.paid > 0 ? ghs(r.paid) : '—', colX[3] + cols[3] - 1, y + 4.5, { size: 7, color: r.paid > 0 ? BLACK : [200,200,200], align: 'right' })
+    // Pas de Expected
+    txt(doc, r.paid > 0 ? ghs(r.paid) : '—', colX[2] + cols[2] - 1, y + 4.5, { size: 7, color: r.paid > 0 ? BLACK : [200,200,200], align: 'right' })
     const balColor = r.balance > 0 ? RED : (r.balance < 0 ? BLUE : GREEN)
-    txt(doc, ghs(r.balance), colX[4] + cols[4] - 1, y + 4.5, { size: 7, style: 'bold', color: balColor, align: 'right' })
+    txt(doc, ghs(r.balance), colX[3] + cols[3] - 1, y + 4.5, { size: 7, style: 'bold', color: balColor, align: 'right' })
     y += 6.5
     pageRemaining -= 6.5
   })
 
-  // Ligne TOTAUX
+  // Ligne TOTAUX (sans Expected)
   hline(doc, y, M, M + CW, BLUE, 0.5)
   y += 2
   fillRect(doc, M, y, CW, 8, BLUE_LT)
   strokeRect(doc, M, y, CW, 8, BLUE, 0.5)
   txt(doc, 'TOTALS', colX[0] + 2, y + 5.5, { size: 8, style: 'bold', color: BLUE })
-  txt(doc, hasSchedule ? ghs(expected) : 'N/A', colX[2] + cols[2] - 1, y + 5.5, { size: 8, style: 'bold', color: BLUE, align: 'right' })
-  txt(doc, ghs(totalPaid),     colX[3] + cols[3] - 1, y + 5.5, { size: 8, style: 'bold', color: GREEN, align: 'right' })
-  txt(doc, hasSchedule ? ghs(outstanding) : 'N/A', colX[4] + cols[4] - 1, y + 5.5, { size: 8, style: 'bold', color: outstanding > 0 ? RED : GREEN, align: 'right' })
+  txt(doc, ghs(totalPaid),     colX[2] + cols[2] - 1, y + 5.5, { size: 8, style: 'bold', color: GREEN, align: 'right' })
+  txt(doc, hasSchedule ? ghs(outstanding) : 'N/A', colX[3] + cols[3] - 1, y + 5.5, { size: 8, style: 'bold', color: outstanding > 0 ? RED : GREEN, align: 'right' })
   y += 12
 
-  // Pied de page
   fillRect(doc, 0, A4_H - 9, A4_W, 9, BLUE)
   txt(doc, `Generated on ${fmtD(new Date())} — ${school.name} — EduManage GH`,
     A4_W / 2, A4_H - 3.5, { size: 6.5, color: [180, 210, 245], align: 'center' })
 
-  // ── SORTIE ────────────────────────────────────────────────────────────
   const blob = doc.output('blob')
   const url  = URL.createObjectURL(blob)
   const win = window.open(url, '_blank')

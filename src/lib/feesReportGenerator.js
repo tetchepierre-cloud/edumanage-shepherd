@@ -1,19 +1,19 @@
 // src/lib/feesReportGenerator.js
-// Rapport des Frais Scolaires — optimisé (appels groupés)
+// Rapport des Frais Scolaires — avec support du Terme
 
 import { jsPDF } from 'jspdf'
 import { supabase } from './supabase'
 
 const A4_W = 210, A4_H = 297, M = 12, CW = A4_W - M * 2
 
-// Couleurs (inchangé)
+// Couleurs
 const BLUE    = [30, 77, 145], BLUE_LT = [214, 228, 247], LGRAY   = [245, 247, 250]
 const MGRAY   = [226, 232, 240], DGRAY   = [107, 114, 128], BLACK   = [17, 24, 39]
 const GREEN   = [22, 101, 52],  GREEN_L = [220, 252, 231], AMBER   = [146, 64, 14]
 const AMBER_L = [254, 243, 199], RED     = [153, 27, 27],  RED_L   = [254, 226, 226]
 const WHITE   = [255, 255, 255], GOLD    = [255, 215, 0]
 
-// Helpers (inchangé)
+// Helpers
 function fillRect(doc, x, y, w, h, color) { doc.setFillColor(...color); doc.rect(x, y, w, h, 'F') }
 function strokeRect(doc, x, y, w, h, color, lw = 0.2) { doc.setDrawColor(...color); doc.setLineWidth(lw); doc.rect(x, y, w, h, 'S') }
 function txt(doc, str, x, y, opts = {}) { doc.setTextColor(...(opts.color || BLACK)); doc.setFontSize(opts.size || 8); doc.setFont('helvetica', opts.style || 'normal'); doc.text(String(str ?? ''), x, y, { align: opts.align || 'left', maxWidth: opts.maxWidth }) }
@@ -22,20 +22,15 @@ function fmtGHS(n) { return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', 
 
 // ── Chargement groupé des classes et élèves ─────────────────────────
 async function loadAllClassesAndStudents({ classIds, levelIds, academicYear }) {
-  // 1. Toutes les classes (filtrées) – on a besoin du level_id maintenant
   let classQuery = supabase.from('classes').select('id, name, level_id').order('name')
   if (classIds?.length) classQuery = classQuery.in('id', classIds)
-  else if (levelIds?.length) {
-    classQuery = classQuery.in('level_id', levelIds)
-  }
+  else if (levelIds?.length) classQuery = classQuery.in('level_id', levelIds)
   const { data: classes } = await classQuery
   if (!classes?.length) return { classes: [], students: [], studentIds: [], levelNames: [], studentLevelMap: {} }
 
   const classIdsArr = classes.map(c => c.id)
-  // Extraire les noms de niveaux à partir des classes (pour compatibilité)
   const levelNames = [...new Set(classes.map(c => c.name.replace(/\s*[A-Za-z]$/, '').trim()))]
 
-  // 2. Tous les élèves actifs de ces classes
   const { data: students } = await supabase
     .from('students')
     .select('id, first_name, last_name, class_id')
@@ -43,8 +38,6 @@ async function loadAllClassesAndStudents({ classIds, levelIds, academicYear }) {
     .eq('active', true)
 
   const studentIds = (students || []).map(s => s.id)
-
-  // Construire une map étudiant → level_id (grâce à la classe)
   const classLevelMap = {}
   classes.forEach(c => { classLevelMap[c.id] = c.level_id })
   const studentLevelMap = {}
@@ -54,8 +47,7 @@ async function loadAllClassesAndStudents({ classIds, levelIds, academicYear }) {
 }
 
 // ── Chargement groupé des attendus (schedules + discounts) ──────────
-async function loadExpectedData(levelNames, academicYear, dateTo, studentIds, studentLevelMap) {
-  // Levels -> ids
+async function loadExpectedData(levelNames, academicYear, dateTo, studentIds, studentLevelMap, term) {
   const { data: levels } = await supabase
     .from('levels')
     .select('id, name')
@@ -64,31 +56,33 @@ async function loadExpectedData(levelNames, academicYear, dateTo, studentIds, st
   if (!levels?.length) return { expectedMap: new Map() }
 
   const levelIds = levels.map(l => l.id)
-  // Tous les frais actifs de ces niveaux
-  const { data: fees } = await supabase
+  let feeQuery = supabase
     .from('fee_structure')
     .select('id, amount, level_id')
     .in('level_id', levelIds)
     .eq('academic_year', academicYear)
     .eq('is_active', true)
+
+  if (term) {
+    feeQuery = feeQuery.eq('term', term)
+  }
+
+  const { data: fees } = await feeQuery
   if (!fees?.length) return { expectedMap: new Map() }
 
   const feeIds = fees.map(f => f.id)
 
-  // Tous les schedules échus pour ces frais
   const { data: schedules } = await supabase
     .from('fee_schedules')
     .select('amount, fee_structure_id')
     .in('fee_structure_id', feeIds)
     .lte('due_date', dateTo.toISOString().split('T')[0])
 
-  // Total par fee_structure_id
   const totalByFee = {}
   ;(schedules || []).forEach(s => {
     totalByFee[s.fee_structure_id] = (totalByFee[s.fee_structure_id] || 0) + parseFloat(s.amount || 0)
   })
 
-  // Discounts pour les élèves concernés
   const { data: discounts } = await supabase
     .from('student_fee_discounts')
     .select('student_id, fee_structure_id, discount_type, discount_value')
@@ -100,15 +94,13 @@ async function loadExpectedData(levelNames, academicYear, dateTo, studentIds, st
     discountIndex[d.student_id][d.fee_structure_id] = d
   })
 
-  // Construire une map : studentId -> total attendu (filtré par niveau de l'élève)
   const expectedMap = new Map()
   studentIds.forEach(sid => {
-    const stuLevel = studentLevelMap[sid]   // ← level_id de l'élève
+    const stuLevel = studentLevelMap[sid]
     if (!stuLevel) return
-
     let total = 0
     fees.forEach(f => {
-      if (f.level_id !== stuLevel) return   // ← on saute les frais qui ne concernent pas ce niveau
+      if (f.level_id !== stuLevel) return
       let feeTotal = totalByFee[f.id] || 0
       const disc = discountIndex[sid]?.[f.id]
       if (disc) {
@@ -124,10 +116,10 @@ async function loadExpectedData(levelNames, academicYear, dateTo, studentIds, st
 }
 
 // ── Chargement groupé des paiements (tous élèves d'un coup) ─────────
-async function loadPaymentsData(studentIds, academicYear, dateFrom, dateTo) {
+async function loadPaymentsData(studentIds, academicYear, dateFrom, dateTo, term) {
   if (!studentIds.length) return new Map()
 
-  const { data: payments } = await supabase
+  let paymentQuery = supabase
     .from('fee_payments')
     .select('student_id, amount')
     .in('student_id', studentIds)
@@ -135,6 +127,12 @@ async function loadPaymentsData(studentIds, academicYear, dateFrom, dateTo) {
     .in('status', ['paid', 'partial'])
     .gte('payment_date', dateFrom.toISOString().split('T')[0])
     .lte('payment_date', dateTo.toISOString().split('T')[0])
+
+  if (term) {
+    paymentQuery = paymentQuery.eq('term', term)
+  }
+
+  const { data: payments } = await paymentQuery
 
   const paidMap = new Map()
   ;(payments || []).forEach(p => {
@@ -155,6 +153,7 @@ export async function generateFeesReport({
   tableType = 'class',
   showOnlyActive = false,
   schoolConfig = {},
+  term = null,             // ← nouveau paramètre optionnel
 }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
   if (!dateFrom || !dateTo) {
@@ -198,8 +197,8 @@ export async function generateFeesReport({
   }
 
   // 2. Charger attendus et paiements en masse
-  const { expectedMap } = await loadExpectedData(levelNames, academicYear, dateTo, studentIds, studentLevelMap)
-  const paidMap = await loadPaymentsData(studentIds, academicYear, dateFrom, dateTo)
+  const { expectedMap } = await loadExpectedData(levelNames, academicYear, dateTo, studentIds, studentLevelMap, term)
+  const paidMap = await loadPaymentsData(studentIds, academicYear, dateFrom, dateTo, term)
 
   // 3. Construire les lignes sans aucun appel réseau
   const allRows = []
@@ -276,10 +275,13 @@ export async function generateFeesReport({
     txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), M + 20, 17, { size: 7.5, color: [190, 215, 245] })
   }
 
-  txt(doc, 'FEES COLLECTION REPORT', A4_W - M, 25, { size: 10, style: 'bold', color: GOLD, align: 'right' })
+  const title = term ? `FEES COLLECTION REPORT — ${term}` : 'FEES COLLECTION REPORT'
+  txt(doc, title, A4_W - M, 25, { size: 10, style: 'bold', color: GOLD, align: 'right' })
   y = 32
   const periodLabel = `${dateFrom.toLocaleDateString('en-GB')} – ${dateTo.toLocaleDateString('en-GB')}`
-  txt(doc, `Period: ${periodLabel}  |  Academic Year ${academicYear}`, M, y, { size: 9, style: 'bold', color: BLACK })
+  let infoLine = `Period: ${periodLabel}  |  Academic Year ${academicYear}`
+  if (term) infoLine += `  |  ${term}`
+  txt(doc, infoLine, M, y, { size: 9, style: 'bold', color: BLACK })
   y += 10
 
   // KPIs

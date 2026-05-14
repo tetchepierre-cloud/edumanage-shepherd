@@ -78,10 +78,11 @@ export default function StudentsPage() {
     const academicYear = '2025/2026'
     const { data: fees } = await supabase
       .from('fee_structure')
-      .select('id, fee_name, fee_type, amount')
+      .select('id, fee_name, fee_type, amount, term')   // ← ajout de `term`
       .eq('level_id', level.id)
       .eq('academic_year', academicYear)
       .eq('is_active', true)
+      .order('term')    // ← tri par terme
       .order('fee_name')
 
     const { data: existingDiscounts } = await supabase
@@ -97,6 +98,7 @@ export default function StudentsPage() {
     const list = (fees || []).map(fee => ({
       fee_structure_id: fee.id,
       fee_name: fee.fee_name,
+      term: fee.term,                        // ← ajout du terme
       annual_amount: parseFloat(fee.amount),
       discount_type: discountMap[fee.id]?.discount_type || 'percentage',
       discount_value: discountMap[fee.id]?.discount_value || 0,
@@ -602,6 +604,7 @@ export default function StudentsPage() {
               </form>
             )}
 
+            {/* ── Onglet Discounts ── */}
             {modalTab === 'discounts' && (
               <div className="p-6 space-y-4">
                 <h3 className="font-semibold text-gray-900">Fee Adjustments for {editStudent?.first_name} {editStudent?.last_name}</h3>
@@ -615,7 +618,7 @@ export default function StudentsPage() {
                       <div key={idx} className="border rounded-lg p-3 flex items-center gap-3">
                         <div className="flex-1">
                           <p className="text-sm font-medium">{discount.fee_name}</p>
-                          <p className="text-xs text-gray-500">Annual: GHS {discount.annual_amount.toFixed(2)}</p>
+                          <p className="text-xs text-gray-500">{discount.term || 'Term ?'} · GHS {discount.annual_amount.toFixed(2)}</p>
                         </div>
                         <div className="flex items-center gap-2">
                           <select
@@ -651,6 +654,12 @@ export default function StudentsPage() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+                {message && (
+                  <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
+                    message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                    {message}
                   </div>
                 )}
                 <button onClick={() => setShowForm(false)} className="text-sm text-blue-600 hover:underline">Close</button>
