@@ -32,7 +32,7 @@ export default function ReportCardPage() {
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
-    supabase.from('classes').select('id, name, level').order('name')
+    supabase.from('classes').select('id, name').order('name')
       .then(({ data }) => setClasses(data || []));
     loadSchoolInfo();
   }, []);

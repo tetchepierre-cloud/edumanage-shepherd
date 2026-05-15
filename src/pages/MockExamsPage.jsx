@@ -29,8 +29,14 @@ export default function MockExamsPage() {
 
   useEffect(() => {
     fetchMocks();
-    supabase.from('classes').select('id, name, level').eq('level', 'JHS').order('name')
-      .then(({ data }) => setClasses(data || []));
+    // Correction : récupération des classes JHS via la relation levels
+    supabase.from('classes')
+      .select('id, name, levels(name)')
+      .order('name')
+      .then(({ data }) => {
+        const jhsClasses = (data || []).filter(c => c.levels?.name?.startsWith('JHS'));
+        setClasses(jhsClasses);
+      });
   }, []);
 
   const fetchMocks = async () => {

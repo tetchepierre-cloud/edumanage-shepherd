@@ -27,8 +27,13 @@ export default function KgAssessmentPage() {
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
-    supabase.from('classes').select('id, name, level').eq('level', 'KG').order('name')
-      .then(({ data }) => setClasses(data || []));
+    supabase.from('classes')
+      .select('id, name, levels(name)')
+      .order('name')
+      .then(({ data }) => {
+        const kgClasses = (data || []).filter(c => c.levels?.name === 'KG');
+        setClasses(kgClasses);
+      });
   }, []);
 
   useEffect(() => {

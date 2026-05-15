@@ -78,11 +78,11 @@ export default function StudentsPage() {
     const academicYear = '2025/2026'
     const { data: fees } = await supabase
       .from('fee_structure')
-      .select('id, fee_name, fee_type, amount, term')   // ← ajout de `term`
+      .select('id, fee_name, fee_type, amount, term')
       .eq('level_id', level.id)
       .eq('academic_year', academicYear)
       .eq('is_active', true)
-      .order('term')    // ← tri par terme
+      .order('term')
       .order('fee_name')
 
     const { data: existingDiscounts } = await supabase
@@ -98,7 +98,7 @@ export default function StudentsPage() {
     const list = (fees || []).map(fee => ({
       fee_structure_id: fee.id,
       fee_name: fee.fee_name,
-      term: fee.term,                        // ← ajout du terme
+      term: fee.term,
       annual_amount: parseFloat(fee.amount),
       discount_type: discountMap[fee.id]?.discount_type || 'percentage',
       discount_value: discountMap[fee.id]?.discount_value || 0,
@@ -186,6 +186,13 @@ export default function StudentsPage() {
     e.preventDefault()
     setSaving(true)
     setMessage('')
+
+    // Validation du numéro de téléphone (10 chiffres exactement, si fourni)
+    if (form.parent_phone.trim() && !/^\d{10}$/.test(form.parent_phone.trim())) {
+      setMessage('❌ Phone number must be exactly 10 digits.')
+      setSaving(false)
+      return
+    }
 
     const payload = {
       first_name:    form.first_name.trim(),
@@ -654,12 +661,6 @@ export default function StudentsPage() {
                         </div>
                       </div>
                     ))}
-                  </div>
-                )}
-                {message && (
-                  <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
-                    message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
-                    {message}
                   </div>
                 )}
                 <button onClick={() => setShowForm(false)} className="text-sm text-blue-600 hover:underline">Close</button>
