@@ -7,14 +7,15 @@ import { generateReportCard } from '../lib/reportCardGenerator';
 import { generateKgReportCard } from '../lib/kgReportCardGenerator';
 
 const ACADEMIC_YEAR = '2025/2026';
+const FUNCTION_URL = 'https://oyfmhwsdsnljrmiehsxi.supabase.co/functions/v1/parent-auth';
 
 export default function ParentPortalPage() {
-  // ── OTP ────────────────────────────────────────────────────────────
+  // ── États OTP ────────────────────────────────────────────────────
   const [phone, setPhone] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
-  const [otpLoading, setOtpLoading] = useState(false);
-  const [otpError, setOtpError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   // ── Session et données ───────────────────────────────────────────
   const [session, setSession] = useState(null);
@@ -33,7 +34,9 @@ export default function ParentPortalPage() {
   const [justifyFile, setJustifyFile] = useState(null);
   const [justifyReason, setJustifyReason] = useState('');
   const [justifyMessage, setJustifyMessage] = useState('');
-  const [schoolConfig, setSchoolConfig] = useState({ name: 'School Name', address: '', phone: '', email: '', logo: null });
+  const [schoolConfig, setSchoolConfig] = useState({
+    name: 'School Name', address: '', phone: '', email: '', logo: null,
+  });
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -46,81 +49,74 @@ export default function ParentPortalPage() {
     const { data } = await supabase.from('app_settings').select('*');
     const cfg = {};
     (data || []).forEach(d => { cfg[d.key] = d.value; });
-    setSchoolConfig({ name: cfg.school_name || 'School Name', address: cfg.address || '', phone: cfg.phone || '', email: cfg.email || '', logo: cfg.logo || null });
+    setSchoolConfig({
+      name: cfg.school_name || 'School Name',
+      address: cfg.address || '',
+      phone: cfg.phone || '',
+      email: cfg.email || '',
+      logo: cfg.logo || null,
+    });
   };
 
-  // ── Étape 1 : Validation du numéro AVANT envoi OTP ─────────────────
+  // ── Envoi OTP ─────────────────────────────────────────────────────
   const handleSendOtp = async (e) => {
     e.preventDefault();
-    setOtpLoading(true);
-    setOtpError('');
+    setLoading(true);
+    setError('');
 
-    const cleaned = phone.replace(/[^0-9]/g, '');
-    const formattedPhone = cleaned.startsWith('0')
-      ? '+233' + cleaned.slice(1)
-      : cleaned.startsWith('233')
-      ? '+' + cleaned
-      : '+233' + cleaned;
-
-    // Vérifier que le numéro existe dans students
-    const { data: studentData, error: studentError } = await supabase
-      .from('students')
-      .select('id')
-      .eq('parent_phone', cleaned)
-      .maybeSingle();
-
-    if (studentError || !studentData) {
-      setOtpError('This phone number is not registered in our system. Please contact the school.');
-      setOtpLoading(false);
-      return;
-    }
-
-    // Numéro valide → envoyer OTP
-    const { error } = await supabase.auth.signInWithOtp({
-      phone: formattedPhone,
-      options: { shouldCreateUser: true, data: { phone: cleaned } },
+    const res = await fetch(FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'send-otp', phone }),
     });
+    const data = await res.json();
 
-    if (error) setOtpError(error.message);
-    else setOtpSent(true);
-    setOtpLoading(false);
+    if (data.error) {
+      setError(data.error);
+    } else {
+      setOtpSent(true);
+    }
+    setLoading(false);
   };
 
   // ── Vérification OTP ──────────────────────────────────────────────
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
-    setOtpLoading(true);
-    setOtpError('');
+    setLoading(true);
+    setError('');
 
-    const cleaned = phone.replace(/[^0-9]/g, '');
-    const formattedPhone = cleaned.startsWith('0')
-      ? '+233' + cleaned.slice(1)
-      : cleaned.startsWith('233')
-      ? '+' + cleaned
-      : '+233' + cleaned;
-
-    const { data, error } = await supabase.auth.verifyOtp({
-      phone: formattedPhone,
-      token: otp,
-      type: 'sms',
+    const res = await fetch(FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'verify-otp', phone, otp }),
     });
+    const data = await res.json();
 
-    if (error) {
-      setOtpError(error.message);
-      setOtpLoading(false);
+    if (data.error) {
+      setError(data.error);
+      setLoading(false);
       return;
     }
 
-    if (data.session) {
-      handleLoggedIn(data.session);
+    // Connexion avec le téléphone (utilisateur déjà créé par l'Edge Function)
+    const cleaned = phone.replace(/[^0-9]/g, '');
+    const formattedPhone = '+233' + cleaned.slice(1);
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithOtp({
+      phone: formattedPhone,
+      options: { shouldCreateUser: false },
+    });
+
+    if (signInError) {
+      setError('Sign in failed. Please try again.');
+    } else if (signInData.session) {
+      handleLoggedIn(signInData.session);
     }
-    setOtpLoading(false);
+    setLoading(false);
   };
 
   // ── Chargement des enfants après connexion ────────────────────────
   const handleLoggedIn = async (currentSession) => {
     setSession(currentSession);
-    // Récupérer le numéro de téléphone depuis auth.users.phone
     const userPhone = currentSession.user.phone;
     if (!userPhone) return;
 
@@ -160,10 +156,19 @@ export default function ParentPortalPage() {
   };
 
   const loadSharedData = async (studentId) => {
-    const { data: notifs } = await supabase.from('attendance_notifications').select('*').eq('student_id', studentId).order('created_at', { ascending: false }).limit(5);
+    const { data: notifs } = await supabase
+      .from('attendance_notifications')
+      .select('*')
+      .eq('student_id', studentId)
+      .order('created_at', { ascending: false })
+      .limit(5);
     setNotifications(notifs || []);
 
-    const { data: justifs } = await supabase.from('absence_justifications').select('*').eq('student_id', studentId).order('created_at', { ascending: false });
+    const { data: justifs } = await supabase
+      .from('absence_justifications')
+      .select('*')
+      .eq('student_id', studentId)
+      .order('created_at', { ascending: false });
     setJustifications(justifs || []);
 
     fetchTerms();
@@ -208,7 +213,11 @@ export default function ParentPortalPage() {
   const fetchAttendance = async (studentId) => {
     const { data } = await supabase.from('attendance').select('status').eq('student_id', studentId);
     const counts = { present: 0, absent: 0, late: 0 };
-    (data || []).forEach(record => { if (record.status === 'P') counts.present++; else if (record.status === 'A') counts.absent++; else if (record.status === 'L') counts.late++; });
+    (data || []).forEach(record => {
+      if (record.status === 'P') counts.present++;
+      else if (record.status === 'A') counts.absent++;
+      else if (record.status === 'L') counts.late++;
+    });
     setAttendance(counts);
   };
 
@@ -292,7 +301,7 @@ export default function ParentPortalPage() {
             <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 hover:text-red-800"><LogOut size={18} /> Sign out</button>
           </div>
 
-          {/* Soldes, etc. (inchangé) */}
+          {/* Solde annuel */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📚 Your Child's School Fees ({ACADEMIC_YEAR})</h2>
             <div className="grid grid-cols-3 gap-4 text-center">
@@ -302,6 +311,7 @@ export default function ParentPortalPage() {
             </div>
           </div>
 
+          {/* Résumé par terme */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📅 Payment Summary by Term</h2>
             {termBalances.length === 0 ? <p className="text-gray-400 text-sm">Loading term details...</p> : (
@@ -316,6 +326,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
+          {/* Présence */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📅 Attendance Summary</h2>
             <div className="grid grid-cols-3 gap-4 text-center">
@@ -325,6 +336,7 @@ export default function ParentPortalPage() {
             </div>
           </div>
 
+          {/* Bulletins */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📚 Terminal Reports</h2>
             {terms.length === 0 ? <p className="text-gray-400 text-sm">No terms available yet.</p> : (
@@ -332,6 +344,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
+          {/* Notifications */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">Recent Notifications</h2>
             {notifications.length === 0 ? <p className="text-gray-400">No recent notifications.</p> : (
@@ -339,6 +352,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
+          {/* Justificatifs */}
           <div className="bg-white rounded-xl shadow p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">Absence Justifications</h2>
@@ -388,9 +402,9 @@ export default function ParentPortalPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
               <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0538777840" className="w-full border rounded-lg px-3 py-2 text-sm" required />
             </div>
-            {otpError && <p className="text-red-500 text-sm text-center">{otpError}</p>}
-            <button type="submit" disabled={otpLoading} className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2">
-              <Smartphone size={16} /> {otpLoading ? 'Sending code...' : 'Send OTP by SMS'}
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2">
+              <Smartphone size={16} /> {loading ? 'Sending code...' : 'Send OTP by SMS'}
             </button>
           </form>
         )}
@@ -402,11 +416,11 @@ export default function ParentPortalPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Verification Code</label>
               <input type="text" value={otp} onChange={e => setOtp(e.target.value)} placeholder="123456" className="w-full border rounded-lg px-3 py-2 text-sm text-center text-lg tracking-widest" required maxLength={6} />
             </div>
-            {otpError && <p className="text-red-500 text-sm text-center">{otpError}</p>}
-            <button type="submit" disabled={otpLoading} className="w-full bg-green-600 text-white py-2 rounded-lg font-medium disabled:opacity-50">
-              {otpLoading ? 'Verifying...' : 'Verify Code & Sign In'}
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <button type="submit" disabled={loading} className="w-full bg-green-600 text-white py-2 rounded-lg font-medium disabled:opacity-50">
+              {loading ? 'Verifying...' : 'Verify Code & Sign In'}
             </button>
-            <button type="button" onClick={() => { setOtpSent(false); setOtp(''); setOtpError(''); }} className="w-full text-sm text-blue-600 hover:underline">Change phone number</button>
+            <button type="button" onClick={() => { setOtpSent(false); setOtp(''); setError(''); }} className="w-full text-sm text-blue-600 hover:underline">Change phone number</button>
           </form>
         )}
       </div>
