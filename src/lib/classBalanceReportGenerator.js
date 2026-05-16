@@ -18,10 +18,9 @@ function txt(doc, str, x, y, opts = {}) { doc.setTextColor(...(opts.color || BLA
 function fmtGHS(n) { return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', { minimumFractionDigits: 2 }) }
 
 /**
- * Calcule le total attendu pour un élève et une année académique
+ * Calcule le total attendu pour un élève et une année académique, avec filtre optionnel par terme
  */
-async function getExpectedForStudent(studentId, academicYear) {
-  // Récupérer le niveau de l'élève
+async function getExpectedForStudent(studentId, academicYear, term) {
   const { data: student } = await supabase
     .from('students')
     .select('class_id, classes(level_id)')
@@ -32,17 +31,20 @@ async function getExpectedForStudent(studentId, academicYear) {
 
   const levelId = student.classes.level_id
 
-  // Récupérer les frais actifs pour ce niveau
-  const { data: fees } = await supabase
+  let feeQuery = supabase
     .from('fee_structure')
     .select('id, amount')
     .eq('level_id', levelId)
     .eq('academic_year', academicYear)
     .eq('is_active', true)
 
+  if (term) {
+    feeQuery = feeQuery.eq('term', term)
+  }
+
+  const { data: fees } = await feeQuery
   if (!fees?.length) return 0
 
-  // Récupérer les réductions
   const { data: discounts } = await supabase
     .from('student_fee_discounts')
     .select('fee_structure_id, discount_type, discount_value')
@@ -62,21 +64,25 @@ async function getExpectedForStudent(studentId, academicYear) {
     total += amount
   })
 
-  // Ajouter les échéances (schedules) si elles existent, sinon on garde le total annuel
-  // (simplifié : on se base sur le total annuel)
   return parseFloat(total.toFixed(2))
 }
 
 /**
- * Calcule le total payé par un élève pour une année académique
+ * Calcule le total payé par un élève pour une année académique, avec filtre optionnel par terme
  */
-async function getTotalPaidForStudent(studentId, academicYear) {
-  const { data: payments } = await supabase
+async function getTotalPaidForStudent(studentId, academicYear, term) {
+  let paymentQuery = supabase
     .from('fee_payments')
     .select('amount')
     .eq('student_id', studentId)
     .eq('academic_year', academicYear)
     .in('status', ['paid', 'partial'])
+
+  if (term) {
+    paymentQuery = paymentQuery.eq('term', term)
+  }
+
+  const { data: payments } = await paymentQuery
 
   return (payments || []).reduce((sum, p) => sum + parseFloat(p.amount), 0)
 }
@@ -84,7 +90,13 @@ async function getTotalPaidForStudent(studentId, academicYear) {
 /**
  * Génère le rapport de solde par classe
  */
-export async function generateClassBalanceReport({ className, classId, academicYear, schoolConfig = {} }) {
+export async function generateClassBalanceReport({
+  className,
+  classId,
+  academicYear,
+  schoolConfig = {},
+  term = null,             // ← nouveau paramètre optionnel
+}) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
 
   const school = {
@@ -122,8 +134,8 @@ export async function generateClassBalanceReport({ className, classId, academicY
   // Calculer les soldes pour chaque élève
   const rows = []
   for (const s of students) {
-    const expected = await getExpectedForStudent(s.id, academicYear)
-    const paid = await getTotalPaidForStudent(s.id, academicYear)
+    const expected = await getExpectedForStudent(s.id, academicYear, term)
+    const paid = await getTotalPaidForStudent(s.id, academicYear, term)
     const balance = expected - paid
     rows.push({ name: `${s.last_name} ${s.first_name}`, expected, paid, balance })
   }
@@ -140,10 +152,13 @@ export async function generateClassBalanceReport({ className, classId, academicY
     txt(doc, school.name, M + 2, 10, { size: 12, style: 'bold', color: WHITE })
     txt(doc, school.address + (school.phone ? `  |  Tel: ${school.phone}` : ''), M + 2, 17, { size: 7.5, color: [190, 215, 245] })
   }
-  txt(doc, 'CLASS BALANCE REPORT', A4_W - M, 25, { size: 10, style: 'bold', color: GOLD, align: 'right' })
+  const title = term ? `CLASS BALANCE REPORT — ${term}` : 'CLASS BALANCE REPORT'
+  txt(doc, title, A4_W - M, 25, { size: 10, style: 'bold', color: GOLD, align: 'right' })
   y = 32
 
-  txt(doc, `Class: ${className}    |    Academic Year: ${academicYear}    |    Students: ${students.length}`, M, y, { size: 9, style: 'bold', color: BLACK })
+  let infoLine = `Class: ${className}    |    Academic Year: ${academicYear}    |    Students: ${students.length}`
+  if (term) infoLine += `    |    ${term}`
+  txt(doc, infoLine, M, y, { size: 9, style: 'bold', color: BLACK })
   y += 12
 
   // Tableau

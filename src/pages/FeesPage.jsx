@@ -28,6 +28,7 @@ export default function FeesPage() {
   const [filterClass,  setFilterClass]  = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterYear,   setFilterYear]   = useState('')
+  const [filterTerm,   setFilterTerm]   = useState('')   // ← nouveau filtre
   const [studentSearch, setStudentSearch] = useState('')
 
   const [feeLines, setFeeLines] = useState([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
@@ -85,7 +86,8 @@ export default function FeesPage() {
 
   const [showDiscountReportModal, setShowDiscountReportModal] = useState(false)
   const [discountReportYear, setDiscountReportYear] = useState('2025/2026')
-  const [discountReportTerm, setDiscountReportTerm] = useState('') // ← ajouté
+  const [discountReportTerm, setDiscountReportTerm] = useState('')
+  const [balanceReportTerm, setBalanceReportTerm] = useState('')
 
   const [showClassBalanceModal, setShowClassBalanceModal] = useState(false)
   const [selectedBalanceClass, setSelectedBalanceClass] = useState('')
@@ -615,7 +617,8 @@ export default function FeesPage() {
     const matchClass   = filterClass  ? p.students?.class_id === filterClass  : true
     const matchStatus  = filterStatus ? p.status          === filterStatus     : true
     const matchYear    = filterYear   ? p.academic_year   === filterYear       : true
-    return matchSearch && matchClass && matchStatus && matchYear
+    const matchTerm    = filterTerm   ? p.term            === filterTerm       : true   // ← ajouté
+    return matchSearch && matchClass && matchStatus && matchYear && matchTerm
   })
 
   const totalCollected = filtered
@@ -722,7 +725,18 @@ export default function FeesPage() {
             {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
         </CanSee>
-        <button onClick={() => { setSearch(''); setFilterClass(''); setFilterStatus(''); setFilterYear('') }} className="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Clear</button>
+        {/* Nouveau filtre par terme */}
+        <CanSee module="fees" section="filters" element="Term select">
+          <select value={filterTerm} onChange={e => setFilterTerm(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
+            <option value="">All Terms</option>
+            <option value="Term 1">Term 1</option>
+            <option value="Term 2">Term 2</option>
+            <option value="Term 3">Term 3</option>
+          </select>
+        </CanSee>
+        <button onClick={() => { setSearch(''); setFilterClass(''); setFilterStatus(''); setFilterYear(''); setFilterTerm(''); }} className="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+          Clear
+        </button>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm overflow-auto max-h-[65vh]">
@@ -1169,7 +1183,7 @@ export default function FeesPage() {
               <button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
             </div>
             <div className="p-6 space-y-4">
-              <div>
+               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Class</label>
                 <select value={selectedBalanceClass} onChange={e => setSelectedBalanceClass(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
                   <option value="">-- Select Class --</option>
@@ -1182,12 +1196,27 @@ export default function FeesPage() {
                   {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
+                <select value={balanceReportTerm} onChange={e => setBalanceReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="">All Terms</option>
+                  <option value="Term 1">Term 1</option>
+                  <option value="Term 2">Term 2</option>
+                  <option value="Term 3">Term 3</option>
+                </select>
+              </div>
               <button
                 onClick={async () => {
                   if (!selectedBalanceClass) return
                   setShowClassBalanceModal(false)
                   const className = classes.find(c => c.id === selectedBalanceClass)?.name || 'Class'
-                  await generateClassBalanceReport({ className, classId: selectedBalanceClass, academicYear: selectedBalanceYear, schoolConfig })
+                  await generateClassBalanceReport({
+                    className,
+                    classId: selectedBalanceClass,
+                    academicYear: selectedBalanceYear,
+                    schoolConfig,
+                    term: balanceReportTerm || null,
+                  })
                 }}
                 className="w-full bg-teal-600 text-white py-2 rounded-lg font-medium hover:bg-teal-700"
               >

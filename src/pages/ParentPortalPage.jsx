@@ -20,6 +20,7 @@ export default function ParentPortalPage() {
   const [student, setStudent] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [balance, setBalance] = useState({ expected: 0, paid: 0, remaining: 0 });
+  const [termBalances, setTermBalances] = useState([]);          // ← résumé par terme
   const [attendance, setAttendance] = useState({ present: 0, absent: 0, late: 0 });
   const [terms, setTerms] = useState([]);
 
@@ -77,7 +78,7 @@ export default function ParentPortalPage() {
     const studentId = currentSession.user.user_metadata?.student_id;
     if (!studentId) return;
 
-    // Informations de l'élève (corrigé : pas de jointure imbriquée)
+    // Informations de l'élève
     const { data: studentData } = await supabase
       .from('students')
       .select('first_name, last_name, class_id')
@@ -111,8 +112,9 @@ export default function ParentPortalPage() {
       .order('created_at', { ascending: false });
     setJustifications(justifs || []);
 
-    // Solde des frais
+    // Soldes
     fetchBalance(studentId);
+    fetchTermBalances(studentId);   // ← chargement du résumé par terme
 
     // Assiduité
     fetchAttendance(studentId);
@@ -122,7 +124,6 @@ export default function ParentPortalPage() {
   };
 
   const fetchBalance = async (studentId) => {
-    // 1. Récupérer le class_id de l'élève
     const { data: studentData } = await supabase
       .from('students')
       .select('class_id')
@@ -131,7 +132,6 @@ export default function ParentPortalPage() {
 
     if (!studentData?.class_id) return;
 
-    // 2. Récupérer le level_id de la classe
     const { data: classData } = await supabase
       .from('classes')
       .select('level_id')
@@ -142,7 +142,6 @@ export default function ParentPortalPage() {
 
     const levelId = classData.level_id;
 
-    // 3. Total attendu
     const { data: fees } = await supabase
       .from('fee_structure')
       .select('amount')
@@ -152,7 +151,6 @@ export default function ParentPortalPage() {
 
     const totalExpected = (fees || []).reduce((sum, f) => sum + parseFloat(f.amount), 0);
 
-    // 4. Total payé
     const { data: payments } = await supabase
       .from('fee_payments')
       .select('amount')
@@ -163,6 +161,56 @@ export default function ParentPortalPage() {
     const totalPaid = (payments || []).reduce((sum, p) => sum + parseFloat(p.amount), 0);
     const remaining = Math.max(0, totalExpected - totalPaid);
     setBalance({ expected: totalExpected, paid: totalPaid, remaining });
+  };
+
+  // Nouvelle fonction : résumé par terme
+  const fetchTermBalances = async (studentId) => {
+    const terms = ['Term 1', 'Term 2', 'Term 3'];
+    const results = [];
+
+    for (const term of terms) {
+      let expected = 0;
+      const { data: studentData } = await supabase
+        .from('students')
+        .select('class_id')
+        .eq('id', studentId)
+        .single();
+
+      if (studentData?.class_id) {
+        const { data: classData } = await supabase
+          .from('classes')
+          .select('level_id')
+          .eq('id', studentData.class_id)
+          .single();
+
+        if (classData?.level_id) {
+          const { data: fees } = await supabase
+            .from('fee_structure')
+            .select('amount')
+            .eq('level_id', classData.level_id)
+            .eq('academic_year', ACADEMIC_YEAR)
+            .eq('term', term)
+            .eq('is_active', true);
+
+          expected = (fees || []).reduce((sum, f) => sum + parseFloat(f.amount), 0);
+        }
+      }
+
+      const { data: payments } = await supabase
+        .from('fee_payments')
+        .select('amount')
+        .eq('student_id', studentId)
+        .eq('academic_year', ACADEMIC_YEAR)
+        .eq('term', term)
+        .in('status', ['paid', 'partial']);
+
+      const paid = (payments || []).reduce((sum, p) => sum + parseFloat(p.amount), 0);
+      const remaining = Math.max(0, expected - paid);
+
+      results.push({ term, expected, paid, remaining });
+    }
+
+    setTermBalances(results);
   };
 
   const fetchAttendance = async (studentId) => {
@@ -297,7 +345,7 @@ export default function ParentPortalPage() {
             </button>
           </div>
 
-          {/* 💰 Solde des Frais */}
+          {/* 💰 Solde des Frais (annuel) */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
               📚 Your Child's School Fees ({ACADEMIC_YEAR})
@@ -318,6 +366,39 @@ export default function ParentPortalPage() {
                 </p>
               </div>
             </div>
+          </div>
+
+          {/* 📅 Récapitulatif par terme */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4">📅 Payment Summary by Term</h2>
+            {termBalances.length === 0 ? (
+              <p className="text-gray-400 text-sm">Loading term details...</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="text-left px-4 py-2 font-semibold text-gray-600">Term</th>
+                      <th className="text-right px-4 py-2 font-semibold text-gray-600">Expected</th>
+                      <th className="text-right px-4 py-2 font-semibold text-gray-600">Paid</th>
+                      <th className="text-right px-4 py-2 font-semibold text-gray-600">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {termBalances.map((tb) => (
+                      <tr key={tb.term} className="hover:bg-gray-50">
+                        <td className="px-4 py-2 font-medium">{tb.term}</td>
+                        <td className="px-4 py-2 text-right">{formatGHS(tb.expected)}</td>
+                        <td className="px-4 py-2 text-right text-green-600">{formatGHS(tb.paid)}</td>
+                        <td className={`px-4 py-2 text-right font-semibold ${tb.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {formatGHS(tb.remaining)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {/* 📅 Assiduité */}
