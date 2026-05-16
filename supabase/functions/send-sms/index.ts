@@ -1,9 +1,12 @@
 // supabase/functions/send-sms/index.ts
 import { serve } from "https://deno.land/std@0.170.0/http/server.ts";
 
-const HUBTEL_API_KEY = Deno.env.get("HUBTEL_API_KEY")!;
-const HUBTEL_SENDER_ID = Deno.env.get("HUBTEL_SENDER_ID") || Deno.env.get("HUBTEL_API_KEY")!;
-const HUBTEL_API_URL = "https://api.hubtel.com/v1/messages/send";
+const CLIENT_ID = Deno.env.get("HUBTEL_CLIENT_ID")!;
+const CLIENT_SECRET = Deno.env.get("HUBTEL_CLIENT_SECRET")!;
+const SENDER_ID = Deno.env.get("HUBTEL_SENDER_ID") || "EduManage";
+
+// URL de l'API Quick Send de Hubtel
+const HUBTEL_API_URL = "https://smsc.hubtel.com/v1/messages/send";
 
 serve(async (req: Request) => {
   try {
@@ -16,26 +19,25 @@ serve(async (req: Request) => {
       );
     }
 
-    // Hubtel attend le numéro au format local (0532000000)
-    // Nettoyage basique au cas où
-    const cleanedPhone = phone.replace(/[^0-9]/g, "");
-    const localPhone = cleanedPhone.startsWith("233")
-      ? "0" + cleanedPhone.slice(3) // convertit 233532000000 en 0532000000
-      : cleanedPhone;
+    // Conversion du format local (0532000000) vers international (233532000000)
+    let intlPhone = phone.replace(/[^0-9]/g, "");
+    if (intlPhone.startsWith("0")) {
+      intlPhone = "233" + intlPhone.slice(1);
+    } else if (!intlPhone.startsWith("233")) {
+      intlPhone = "233" + intlPhone;
+    }
 
-    const payload = {
-      from: HUBTEL_SENDER_ID,
-      to: localPhone,
+    // Construction de l'URL avec les paramètres requis par Quick Send
+    const params = new URLSearchParams({
+      clientid: CLIENT_ID,
+      clientsecret: CLIENT_SECRET,
+      from: SENDER_ID,
+      to: intlPhone,
       content: message,
-    };
+    });
 
-    const response = await fetch(HUBTEL_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Basic " + btoa(HUBTEL_API_KEY + ":"),
-      },
-      body: JSON.stringify(payload),
+    const response = await fetch(`${HUBTEL_API_URL}?${params.toString()}`, {
+      method: "GET",
     });
 
     const data = await response.json();
