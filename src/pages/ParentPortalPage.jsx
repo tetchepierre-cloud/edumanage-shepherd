@@ -49,39 +49,22 @@ export default function ParentPortalPage() {
     setSchoolConfig({ name: cfg.school_name || 'School Name', address: cfg.address || '', phone: cfg.phone || '', email: cfg.email || '', logo: cfg.logo || null });
   };
 
-  // ── Envoi OTP (vérification locale avant) ────────────────────────
+  // ── Envoi OTP ─────────────────────────────────────────────────────
   const handleSendOtp = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     const cleaned = phone.replace(/[^0-9]/g, '');
-
-    // 1. Vérifier que le numéro existe dans la base
-    const { data: studentData, error: studentError } = await supabase
-      .from('students')
-      .select('id')
-      .eq('parent_phone', cleaned)
-      .maybeSingle();
-
-    if (studentError || !studentData) {
-      setError('This phone number is not registered in our system.');
-      setLoading(false);
-      return;
-    }
-
-    // 2. Numéro trouvé → envoyer OTP
     const formattedPhone = '+233' + cleaned.slice(1);
+
     const { error: otpError } = await supabase.auth.signInWithOtp({
       phone: formattedPhone,
       options: { shouldCreateUser: true, data: { phone: cleaned } },
     });
 
-    if (otpError) {
-      setError(otpError.message);
-    } else {
-      setOtpSent(true);
-    }
+    if (otpError) setError(otpError.message);
+    else setOtpSent(true);
     setLoading(false);
   };
 
@@ -112,29 +95,27 @@ export default function ParentPortalPage() {
     setLoading(false);
   };
 
-  // ── Chargement des enfants ────────────────────────────────────────
+  // ── Chargement après connexion (utilise student_id du hook) ──────
   const handleLoggedIn = async (currentSession) => {
     setSession(currentSession);
-    const userPhone = currentSession.user.phone;
-    if (!userPhone) return;
+    const studentId = currentSession.user.user_metadata?.student_id;
+    if (!studentId) return;
 
-    const { data: studentsData } = await supabase
+    const { data: studentData } = await supabase
       .from('students')
-      .select('id, first_name, last_name, class_id, parent_name, classes(name)')
-      .eq('parent_phone', userPhone)
-      .eq('active', true)
-      .order('last_name');
+      .select('first_name, last_name, class_id, parent_name, classes(name)')
+      .eq('id', studentId)
+      .maybeSingle();
 
-    if (!studentsData || studentsData.length === 0) return;
+    if (!studentData) return;
 
-    setAllStudents(studentsData);
-    const firstStudent = studentsData[0];
-    setSelectedStudentId(firstStudent.id);
-    setStudent(firstStudent);
-    setParentName(firstStudent.parent_name || 'Parent');
+    setStudent(studentData);
+    setParentName(studentData.parent_name || 'Parent');
+    setAllStudents([studentData]);
+    setSelectedStudentId(studentData.id);
 
-    loadStudentData(firstStudent.id);
-    loadSharedData(firstStudent.id);
+    loadStudentData(studentData.id);
+    loadSharedData(studentData.id);
   };
 
   const handleSelectStudent = async (studentId) => {
@@ -163,7 +144,7 @@ export default function ParentPortalPage() {
     fetchTerms();
   };
 
-  // ── Fonctions de données (inchangées) ────────────────────────────
+  // ── Fonctions de données ──────────────────────────────────────────
   const fetchBalance = async (studentId) => {
     const { data: studentData } = await supabase.from('students').select('class_id').eq('id', studentId).single();
     if (!studentData?.class_id) return;
@@ -282,7 +263,65 @@ export default function ParentPortalPage() {
             </div>
             <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 hover:text-red-800"><LogOut size={18} /> Sign out</button>
           </div>
-          {/* ... contenu identique aux versions précédentes ... */}
+
+          {/* Solde annuel */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4">📚 Your Child's School Fees ({ACADEMIC_YEAR})</h2>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="bg-gray-50 rounded-lg p-3"><p className="text-sm text-gray-500">Total fees for the year</p><p className="text-xl font-bold text-blue-600">{formatGHS(balance.expected)}</p></div>
+              <div className="bg-gray-50 rounded-lg p-3"><p className="text-sm text-gray-500">Already paid</p><p className="text-xl font-bold text-green-600">{formatGHS(balance.paid)}</p></div>
+              <div className="bg-gray-50 rounded-lg p-3"><p className="text-sm text-gray-500">Left to pay</p><p className={`text-xl font-bold ${balance.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatGHS(balance.remaining)}</p></div>
+            </div>
+          </div>
+
+          {/* Résumé par terme */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4">📅 Payment Summary by Term</h2>
+            {termBalances.length === 0 ? <p className="text-gray-400 text-sm">Loading term details...</p> : (
+              <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50 border-b"><tr><th className="text-left px-4 py-2 font-semibold text-gray-600">Term</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Expected</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Paid</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Balance</th></tr></thead><tbody className="divide-y divide-gray-100">{termBalances.map((tb) => (<tr key={tb.term} className="hover:bg-gray-50"><td className="px-4 py-2 font-medium">{tb.term}</td><td className="px-4 py-2 text-right">{formatGHS(tb.expected)}</td><td className="px-4 py-2 text-right text-green-600">{formatGHS(tb.paid)}</td><td className={`px-4 py-2 text-right font-semibold ${tb.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatGHS(tb.remaining)}</td></tr>))}</tbody></table></div>
+            )}
+          </div>
+
+          {/* Présence */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4">📅 Attendance Summary</h2>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="bg-green-50 rounded-lg p-3"><p className="text-sm text-gray-500">Days Present</p><p className="text-2xl font-bold text-green-700">{attendance.present}</p></div>
+              <div className="bg-red-50 rounded-lg p-3"><p className="text-sm text-gray-500">Days Absent</p><p className="text-2xl font-bold text-red-700">{attendance.absent}</p></div>
+              <div className="bg-yellow-50 rounded-lg p-3"><p className="text-sm text-gray-500">Days Late</p><p className="text-2xl font-bold text-yellow-700">{attendance.late}</p></div>
+            </div>
+          </div>
+
+          {/* Bulletins */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4">📚 Terminal Reports</h2>
+            {terms.length === 0 ? <p className="text-gray-400 text-sm">No terms available yet.</p> : (
+              <ul className="space-y-2">{terms.map(term => (<li key={term.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg"><span className="font-medium">{term.name} ({term.academic_year})</span><button onClick={() => handleGenerateReport(term.id)} className="text-blue-600 hover:text-blue-800 text-sm font-medium flex items-center gap-1"><FileText size={16} /> View Report</button></li>))}</ul>
+            )}
+          </div>
+
+          {/* Notifications */}
+          <div className="bg-white rounded-xl shadow p-6 mb-6">
+            <h2 className="text-lg font-semibold mb-4">Recent Notifications</h2>
+            {notifications.length === 0 ? <p className="text-gray-400">No recent notifications.</p> : (
+              <ul className="divide-y">{notifications.map(n => (<li key={n.id} className="py-2 flex justify-between"><span className="text-sm">{n.message}</span><span className="text-xs text-gray-400">{new Date(n.created_at).toLocaleDateString('en-GB')}</span></li>))}</ul>
+            )}
+          </div>
+
+          {/* Justificatifs */}
+          <div className="bg-white rounded-xl shadow p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-semibold">Absence Justifications</h2>
+              <button onClick={() => setShowJustifyModal(true)} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700"><Upload size={16} /> Submit Justification</button>
+            </div>
+            {justifications.length === 0 ? <p className="text-gray-400">No justifications submitted yet.</p> : (
+              <ul className="divide-y">{justifications.map(j => (<li key={j.id} className="py-3 flex justify-between items-center"><div><p className="text-sm font-medium">{j.reason || 'No reason provided'}</p><p className="text-xs text-gray-400">{new Date(j.created_at).toLocaleDateString('en-GB')}</p>{j.validated_at ? <span className="text-xs text-green-600 font-medium">Validated</span> : <span className="text-xs text-yellow-600 font-medium">Pending review</span>}</div>{j.document_url && <a href={j.document_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 text-xs underline">View document</a>}</li>))}</ul>
+            )}
+          </div>
+
+          {showJustifyModal && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md"><h3 className="font-semibold text-lg mb-4">Submit Absence Justification</h3><div className="space-y-3"><div><label className="block text-xs font-medium text-gray-500 mb-1">Reason</label><textarea value={justifyReason} onChange={e => setJustifyReason(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" rows={3} placeholder="e.g. Medical certificate, family event..." /></div><div><label className="block text-xs font-medium text-gray-500 mb-1">Attachment (optional)</label><input type="file" onChange={e => setJustifyFile(e.target.files[0])} className="w-full text-sm" /></div>{justifyMessage && <p className="text-sm text-blue-600">{justifyMessage}</p>}<div className="flex gap-2 pt-2"><button onClick={handleUploadJustification} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">Submit</button><button onClick={() => { setShowJustifyModal(false); setJustifyMessage(''); }} className="border px-4 py-2 rounded-lg text-sm">Cancel</button></div></div></div></div>
+          )}
         </div>
       </div>
     );
@@ -299,27 +338,17 @@ export default function ParentPortalPage() {
         </div>
         {!otpSent && (
           <form onSubmit={handleSendOtp} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-              <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0538777840" className="w-full border rounded-lg px-3 py-2 text-sm" required />
-            </div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label><input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0538777840" className="w-full border rounded-lg px-3 py-2 text-sm" required /></div>
             {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-            <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2">
-              <Smartphone size={16} /> {loading ? 'Sending code...' : 'Send OTP by SMS'}
-            </button>
+            <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2"><Smartphone size={16} /> {loading ? 'Sending code...' : 'Send OTP by SMS'}</button>
           </form>
         )}
         {otpSent && (
           <form onSubmit={handleVerifyOtp} className="space-y-4">
             <p className="text-sm text-gray-600 text-center">A code has been sent to <strong>{phone}</strong></p>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Verification Code</label>
-              <input type="text" value={otp} onChange={e => setOtp(e.target.value)} placeholder="123456" className="w-full border rounded-lg px-3 py-2 text-sm text-center text-lg tracking-widest" required maxLength={6} />
-            </div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Verification Code</label><input type="text" value={otp} onChange={e => setOtp(e.target.value)} placeholder="123456" className="w-full border rounded-lg px-3 py-2 text-sm text-center text-lg tracking-widest" required maxLength={6} /></div>
             {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-            <button type="submit" disabled={loading} className="w-full bg-green-600 text-white py-2 rounded-lg font-medium disabled:opacity-50">
-              {loading ? 'Verifying...' : 'Verify Code & Sign In'}
-            </button>
+            <button type="submit" disabled={loading} className="w-full bg-green-600 text-white py-2 rounded-lg font-medium disabled:opacity-50">{loading ? 'Verifying...' : 'Verify Code & Sign In'}</button>
             <button type="button" onClick={() => { setOtpSent(false); setOtp(''); setError(''); }} className="w-full text-sm text-blue-600 hover:underline">Change phone number</button>
           </form>
         )}
