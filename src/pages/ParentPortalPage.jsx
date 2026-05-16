@@ -67,7 +67,6 @@ export default function ParentPortalPage() {
     setOtpLoading(true);
     setOtpError('');
 
-    // Nettoyage et formatage du numéro (format international E.164)
     const cleaned = phone.replace(/[^0-9]/g, '');
     const formattedPhone = cleaned.startsWith('0')
       ? '+233' + cleaned.slice(1)
@@ -79,7 +78,7 @@ export default function ParentPortalPage() {
       phone: formattedPhone,
       options: {
         shouldCreateUser: true,
-        data: { phone: cleaned }, // sera utilisé par le Auth Hook
+        data: { phone: cleaned },
       },
     });
 
@@ -116,9 +115,7 @@ export default function ParentPortalPage() {
       return;
     }
 
-    // Connexion réussie
     if (data.session) {
-      // Vérifier si c'est un nouvel utilisateur (pas de mot de passe défini)
       const { data: userData } = await supabase.auth.getUser();
       const hasPassword = userData?.user?.has_password;
       if (!hasPassword) {
@@ -140,7 +137,6 @@ export default function ParentPortalPage() {
     if (error) {
       setOtpError(error.message);
     } else {
-      // Mot de passe créé, récupérer la session
       const { data: { session: newSession } } = await supabase.auth.getSession();
       handleLoggedIn(newSession);
     }
@@ -314,12 +310,14 @@ export default function ParentPortalPage() {
   // ── Vue connectée ──────────────────────────────────────────────────
   if (session && student) {
     const formatGHS = (n) => `GHS ${parseFloat(n || 0).toFixed(2)}`;
+    const parentName = session.user.user_metadata?.full_name || 'Parent'; // ← correction
+
     return (
       <div className="min-h-screen bg-gray-100 p-6">
         <div className="max-w-4xl mx-auto">
           <div className="flex justify-between items-center mb-8">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Welcome, {student.first_name}!</h1>
+              <h1 className="text-2xl font-bold text-gray-900">Welcome, {parentName}!</h1>
               <p className="text-gray-500">Class: {student.classes?.name}</p>
             </div>
             <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 hover:text-red-800"><LogOut size={18} /> Sign out</button>
