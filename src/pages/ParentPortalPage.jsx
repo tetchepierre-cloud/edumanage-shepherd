@@ -1,7 +1,7 @@
 // src/pages/ParentPortalPage.jsx
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { UserCircle, LogOut, Upload, FileText, Smartphone } from 'lucide-react';
+import { UserCircle, LogOut, Upload, FileText, Smartphone, ChevronDown } from 'lucide-react';
 import { computeTermReport } from '../lib/gradeCalculations';
 import { generateReportCard } from '../lib/reportCardGenerator';
 import { generateKgReportCard } from '../lib/kgReportCardGenerator';
@@ -9,26 +9,29 @@ import { generateKgReportCard } from '../lib/kgReportCardGenerator';
 const ACADEMIC_YEAR = '2025/2026';
 
 export default function ParentPortalPage() {
-  // ── Étape 1 : téléphone ────────────────────────────────────────
+  // ── États de connexion ──────────────────────────────────────────
   const [phone, setPhone] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
   const [otpLoading, setOtpLoading] = useState(false);
   const [otpError, setOtpError] = useState('');
 
-  // ── Étape 2 : création du mot de passe (1ère connexion) ────────
   const [isNewUser, setIsNewUser] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
 
-  // ── Connexion classique ─────────────────────────────────────────
   const [signInPhone, setSignInPhone] = useState('');
   const [signInPassword, setSignInPassword] = useState('');
   const [signInLoading, setSignInLoading] = useState(false);
   const [signInError, setSignInError] = useState('');
 
+  // ── Session et données ───────────────────────────────────────────
   const [session, setSession] = useState(null);
-  const [student, setStudent] = useState(null);
+  const [allStudents, setAllStudents] = useState([]);       // tous les enfants du parent
+  const [selectedStudentId, setSelectedStudentId] = useState(null);
+  const [student, setStudent] = useState(null);              // données de l'élève sélectionné
+  const [parentName, setParentName] = useState('Parent');    // nom du parent
+
   const [notifications, setNotifications] = useState([]);
   const [balance, setBalance] = useState({ expected: 0, paid: 0, remaining: 0 });
   const [termBalances, setTermBalances] = useState([]);
@@ -61,7 +64,7 @@ export default function ParentPortalPage() {
     });
   };
 
-  // ── Envoi OTP ─────────────────────────────────────────────────────
+  // ── Connexion OTP ────────────────────────────────────────────────
   const handleSendOtp = async (e) => {
     e.preventDefault();
     setOtpLoading(true);
@@ -82,15 +85,11 @@ export default function ParentPortalPage() {
       },
     });
 
-    if (error) {
-      setOtpError(error.message);
-    } else {
-      setOtpSent(true);
-    }
+    if (error) setOtpError(error.message);
+    else setOtpSent(true);
     setOtpLoading(false);
   };
 
-  // ── Vérification OTP ──────────────────────────────────────────────
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     setOtpLoading(true);
@@ -118,37 +117,28 @@ export default function ParentPortalPage() {
     if (data.session) {
       const { data: userData } = await supabase.auth.getUser();
       const hasPassword = userData?.user?.has_password;
-      if (!hasPassword) {
-        setIsNewUser(true);
-      } else {
-        handleLoggedIn(data.session);
-      }
+      if (!hasPassword) setIsNewUser(true);
+      else handleLoggedIn(data.session);
     }
     setOtpLoading(false);
   };
 
-  // ── Création du mot de passe ──────────────────────────────────────
   const handleSetPassword = async (e) => {
     e.preventDefault();
     setPasswordLoading(true);
-
     const { error } = await supabase.auth.updateUser({ password: newPassword });
-
-    if (error) {
-      setOtpError(error.message);
-    } else {
+    if (error) setOtpError(error.message);
+    else {
       const { data: { session: newSession } } = await supabase.auth.getSession();
       handleLoggedIn(newSession);
     }
     setPasswordLoading(false);
   };
 
-  // ── Connexion classique (téléphone + mot de passe) ────────────────
   const handleSignIn = async (e) => {
     e.preventDefault();
     setSignInLoading(true);
     setSignInError('');
-
     const cleaned = signInPhone.replace(/[^0-9]/g, '');
     const formattedPhone = cleaned.startsWith('0')
       ? '+233' + cleaned.slice(1)
@@ -161,36 +151,59 @@ export default function ParentPortalPage() {
       password: signInPassword,
     });
 
-    if (error) {
-      setSignInError(error.message);
-    } else if (data.session) {
-      handleLoggedIn(data.session);
-    }
+    if (error) setSignInError(error.message);
+    else if (data.session) handleLoggedIn(data.session);
     setSignInLoading(false);
   };
 
-  // ── Fonctions de chargement après connexion ────────────────────
+  // ── Gestion de la session : chargement des enfants ──────────────
   const handleLoggedIn = async (currentSession) => {
     setSession(currentSession);
-    const studentId = currentSession.user.user_metadata?.student_id;
-    if (!studentId) return;
+    const parentPhone = currentSession.user.phone || currentSession.user.user_metadata?.phone;
+    if (!parentPhone) return;
 
-    const { data: studentData } = await supabase
+    // Récupérer tous les élèves dont le parent a ce numéro
+    const { data: studentsData } = await supabase
       .from('students')
-      .select('first_name, last_name, class_id')
-      .eq('id', studentId)
-      .maybeSingle();
+      .select('id, first_name, last_name, class_id, parent_name, classes(name)')
+      .eq('parent_phone', parentPhone)
+      .eq('active', true)
+      .order('last_name');
 
-    if (studentData && studentData.class_id) {
-      const { data: classData } = await supabase
-        .from('classes')
-        .select('name, level')
-        .eq('id', studentData.class_id)
-        .single();
-      studentData.classes = classData;
-    }
-    setStudent(studentData);
+    if (!studentsData || studentsData.length === 0) return;
 
+    setAllStudents(studentsData);
+    // Par défaut, sélectionner le premier enfant
+    const firstStudent = studentsData[0];
+    setSelectedStudentId(firstStudent.id);
+    setStudent(firstStudent);
+    // Nom du parent : utiliser le parent_name du premier enfant, ou "Parent"
+    setParentName(firstStudent.parent_name || 'Parent');
+
+    // Charger les données pour cet enfant
+    loadStudentData(firstStudent.id);
+    loadSharedData(firstStudent.id);
+  };
+
+  // Changement d'enfant via le sélecteur
+  const handleSelectStudent = async (studentId) => {
+    setSelectedStudentId(studentId);
+    const selected = allStudents.find(s => s.id === studentId);
+    if (!selected) return;
+    setStudent(selected);
+    setParentName(selected.parent_name || 'Parent');
+    // Recharger les données spécifiques à l'élève
+    loadStudentData(studentId);
+    loadSharedData(studentId);
+  };
+
+  const loadStudentData = async (studentId) => {
+    fetchBalance(studentId);
+    fetchTermBalances(studentId);
+    fetchAttendance(studentId);
+  };
+
+  const loadSharedData = async (studentId) => {
     const { data: notifs } = await supabase
       .from('attendance_notifications')
       .select('*')
@@ -206,12 +219,10 @@ export default function ParentPortalPage() {
       .order('created_at', { ascending: false });
     setJustifications(justifs || []);
 
-    fetchBalance(studentId);
-    fetchTermBalances(studentId);
-    fetchAttendance(studentId);
     fetchTerms();
   };
 
+  // ── Fonctions de données (inchangées) ────────────────────────────
   const fetchBalance = async (studentId) => {
     const { data: studentData } = await supabase.from('students').select('class_id').eq('id', studentId).single();
     if (!studentData?.class_id) return;
@@ -280,13 +291,14 @@ export default function ParentPortalPage() {
     if (!justifyFile) return;
     setJustifyMessage('Uploading...');
     const fileName = `${student.id}/${Date.now()}_${justifyFile.name}`;
-    const { data: uploadData, error: uploadError } = await supabase.storage.from('justificatifs').upload(fileName, justifyFile);
+    const { error: uploadError } = await supabase.storage.from('justificatifs').upload(fileName, justifyFile);
     if (uploadError) { setJustifyMessage('Upload failed: ' + uploadError.message); return; }
     const { data: publicUrlData } = supabase.storage.from('justificatifs').getPublicUrl(fileName);
     const { data: parentAccount } = await supabase.from('parent_portal_accounts').select('id').eq('student_id', student.id).maybeSingle();
     if (!parentAccount) { setJustifyMessage('Could not verify parent account.'); return; }
     const { error: insertError } = await supabase.from('absence_justifications').insert({ student_id: student.id, parent_id: parentAccount.id, document_url: publicUrlData.publicUrl, reason: justifyReason });
-    if (insertError) { setJustifyMessage('Insert failed: ' + insertError.message); } else {
+    if (insertError) setJustifyMessage('Insert failed: ' + insertError.message);
+    else {
       setJustifyMessage('Justification submitted!');
       setShowJustifyModal(false);
       setJustifyFile(null);
@@ -300,6 +312,9 @@ export default function ParentPortalPage() {
     await supabase.auth.signOut();
     setSession(null);
     setStudent(null);
+    setAllStudents([]);
+    setSelectedStudentId(null);
+    setParentName('Parent');
     setNotifications([]);
     setJustifications([]);
     setBalance({ expected: 0, paid: 0, remaining: 0 });
@@ -310,19 +325,40 @@ export default function ParentPortalPage() {
   // ── Vue connectée ──────────────────────────────────────────────────
   if (session && student) {
     const formatGHS = (n) => `GHS ${parseFloat(n || 0).toFixed(2)}`;
-    const parentName = session.user.user_metadata?.full_name || 'Parent'; // ← correction
 
     return (
       <div className="min-h-screen bg-gray-100 p-6">
         <div className="max-w-4xl mx-auto">
-          <div className="flex justify-between items-center mb-8">
+          {/* En-tête avec sélecteur d'enfant si plusieurs */}
+          <div className="flex justify-between items-center mb-6">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Welcome, {parentName}!</h1>
-              <p className="text-gray-500">Class: {student.classes?.name}</p>
+              {allStudents.length > 1 && (
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="text-sm text-gray-500">Your child:</label>
+                  <select
+                    value={selectedStudentId}
+                    onChange={e => handleSelectStudent(e.target.value)}
+                    className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {allStudents.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.first_name} {s.last_name} ({s.classes?.name || 'No class'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {allStudents.length === 1 && (
+                <p className="text-sm text-gray-500 mt-1">
+                  Your child: <strong className="text-blue-700">{student.first_name} {student.last_name}</strong> — {student.classes?.name}
+                </p>
+              )}
             </div>
             <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 hover:text-red-800"><LogOut size={18} /> Sign out</button>
           </div>
 
+          {/* Solde annuel */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📚 Your Child's School Fees ({ACADEMIC_YEAR})</h2>
             <div className="grid grid-cols-3 gap-4 text-center">
@@ -332,6 +368,7 @@ export default function ParentPortalPage() {
             </div>
           </div>
 
+          {/* Résumé par terme */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📅 Payment Summary by Term</h2>
             {termBalances.length === 0 ? <p className="text-gray-400 text-sm">Loading term details...</p> : (
@@ -352,6 +389,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
+          {/* Présence */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📅 Attendance Summary</h2>
             <div className="grid grid-cols-3 gap-4 text-center">
@@ -361,6 +399,7 @@ export default function ParentPortalPage() {
             </div>
           </div>
 
+          {/* Bulletins */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📚 Terminal Reports</h2>
             {terms.length === 0 ? <p className="text-gray-400 text-sm">No terms available yet.</p> : (
@@ -375,6 +414,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
+          {/* Notifications */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">Recent Notifications</h2>
             {notifications.length === 0 ? <p className="text-gray-400">No recent notifications.</p> : (
@@ -382,6 +422,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
+          {/* Justificatifs */}
           <div className="bg-white rounded-xl shadow p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">Absence Justifications</h2>
@@ -425,7 +466,6 @@ export default function ParentPortalPage() {
           <p className="text-sm text-gray-500">Sign in with your phone number</p>
         </div>
 
-        {/* ── Étape 1 : Saisie du téléphone ── */}
         {!otpSent && !isNewUser && (
           <form onSubmit={handleSendOtp} className="space-y-4">
             <div>
@@ -442,7 +482,6 @@ export default function ParentPortalPage() {
           </form>
         )}
 
-        {/* ── Étape 2 : Saisie du code OTP ── */}
         {otpSent && !isNewUser && (
           <form onSubmit={handleVerifyOtp} className="space-y-4">
             <p className="text-sm text-gray-600 text-center">A verification code has been sent to <strong>{phone}</strong></p>
@@ -458,7 +497,6 @@ export default function ParentPortalPage() {
           </form>
         )}
 
-        {/* ── Étape 3 : Création du mot de passe (1ère connexion) ── */}
         {isNewUser && (
           <form onSubmit={handleSetPassword} className="space-y-4">
             <p className="text-sm text-gray-600 text-center">Welcome! Create a password for your next sign-ins.</p>
@@ -473,7 +511,6 @@ export default function ParentPortalPage() {
           </form>
         )}
 
-        {/* ── Connexion classique (téléphone + mot de passe) ── */}
         {otpSent === null && !isNewUser && (
           <form onSubmit={handleSignIn} className="space-y-4">
             <div>
