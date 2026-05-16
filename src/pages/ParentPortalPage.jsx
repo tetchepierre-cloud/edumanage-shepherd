@@ -1,7 +1,7 @@
 // src/pages/ParentPortalPage.jsx
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { UserCircle, LogOut, Upload, FileText, Smartphone, ChevronDown } from 'lucide-react';
+import { UserCircle, LogOut, Upload, FileText, Smartphone } from 'lucide-react';
 import { computeTermReport } from '../lib/gradeCalculations';
 import { generateReportCard } from '../lib/reportCardGenerator';
 import { generateKgReportCard } from '../lib/kgReportCardGenerator';
@@ -9,28 +9,19 @@ import { generateKgReportCard } from '../lib/kgReportCardGenerator';
 const ACADEMIC_YEAR = '2025/2026';
 
 export default function ParentPortalPage() {
-  // ── États de connexion ──────────────────────────────────────────
+  // ── OTP ────────────────────────────────────────────────────────────
   const [phone, setPhone] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
   const [otpLoading, setOtpLoading] = useState(false);
   const [otpError, setOtpError] = useState('');
 
-  const [isNewUser, setIsNewUser] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
-  const [passwordLoading, setPasswordLoading] = useState(false);
-
-  const [signInPhone, setSignInPhone] = useState('');
-  const [signInPassword, setSignInPassword] = useState('');
-  const [signInLoading, setSignInLoading] = useState(false);
-  const [signInError, setSignInError] = useState('');
-
   // ── Session et données ───────────────────────────────────────────
   const [session, setSession] = useState(null);
-  const [allStudents, setAllStudents] = useState([]);       // tous les enfants du parent
+  const [allStudents, setAllStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState(null);
-  const [student, setStudent] = useState(null);              // données de l'élève sélectionné
-  const [parentName, setParentName] = useState('Parent');    // nom du parent
+  const [student, setStudent] = useState(null);
+  const [parentName, setParentName] = useState('Parent');
 
   const [notifications, setNotifications] = useState([]);
   const [balance, setBalance] = useState({ expected: 0, paid: 0, remaining: 0 });
@@ -55,16 +46,10 @@ export default function ParentPortalPage() {
     const { data } = await supabase.from('app_settings').select('*');
     const cfg = {};
     (data || []).forEach(d => { cfg[d.key] = d.value; });
-    setSchoolConfig({
-      name: cfg.school_name || 'School Name',
-      address: cfg.address || '',
-      phone: cfg.phone || '',
-      email: cfg.email || '',
-      logo: cfg.logo || null,
-    });
+    setSchoolConfig({ name: cfg.school_name || 'School Name', address: cfg.address || '', phone: cfg.phone || '', email: cfg.email || '', logo: cfg.logo || null });
   };
 
-  // ── Connexion OTP ────────────────────────────────────────────────
+  // ── OTP handlers ──────────────────────────────────────────────────
   const handleSendOtp = async (e) => {
     e.preventDefault();
     setOtpLoading(true);
@@ -79,10 +64,7 @@ export default function ParentPortalPage() {
 
     const { error } = await supabase.auth.signInWithOtp({
       phone: formattedPhone,
-      options: {
-        shouldCreateUser: true,
-        data: { phone: cleaned },
-      },
+      options: { shouldCreateUser: true, data: { phone: cleaned } },
     });
 
     if (error) setOtpError(error.message);
@@ -115,54 +97,17 @@ export default function ParentPortalPage() {
     }
 
     if (data.session) {
-      const { data: userData } = await supabase.auth.getUser();
-      const hasPassword = userData?.user?.has_password;
-      if (!hasPassword) setIsNewUser(true);
-      else handleLoggedIn(data.session);
+      handleLoggedIn(data.session);
     }
     setOtpLoading(false);
   };
 
-  const handleSetPassword = async (e) => {
-    e.preventDefault();
-    setPasswordLoading(true);
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) setOtpError(error.message);
-    else {
-      const { data: { session: newSession } } = await supabase.auth.getSession();
-      handleLoggedIn(newSession);
-    }
-    setPasswordLoading(false);
-  };
-
-  const handleSignIn = async (e) => {
-    e.preventDefault();
-    setSignInLoading(true);
-    setSignInError('');
-    const cleaned = signInPhone.replace(/[^0-9]/g, '');
-    const formattedPhone = cleaned.startsWith('0')
-      ? '+233' + cleaned.slice(1)
-      : cleaned.startsWith('233')
-      ? '+' + cleaned
-      : '+233' + cleaned;
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      phone: formattedPhone,
-      password: signInPassword,
-    });
-
-    if (error) setSignInError(error.message);
-    else if (data.session) handleLoggedIn(data.session);
-    setSignInLoading(false);
-  };
-
-  // ── Gestion de la session : chargement des enfants ──────────────
+  // ── Chargement des enfants et données ─────────────────────────────
   const handleLoggedIn = async (currentSession) => {
     setSession(currentSession);
     const parentPhone = currentSession.user.phone || currentSession.user.user_metadata?.phone;
     if (!parentPhone) return;
 
-    // Récupérer tous les élèves dont le parent a ce numéro
     const { data: studentsData } = await supabase
       .from('students')
       .select('id, first_name, last_name, class_id, parent_name, classes(name)')
@@ -173,26 +118,21 @@ export default function ParentPortalPage() {
     if (!studentsData || studentsData.length === 0) return;
 
     setAllStudents(studentsData);
-    // Par défaut, sélectionner le premier enfant
     const firstStudent = studentsData[0];
     setSelectedStudentId(firstStudent.id);
     setStudent(firstStudent);
-    // Nom du parent : utiliser le parent_name du premier enfant, ou "Parent"
     setParentName(firstStudent.parent_name || 'Parent');
 
-    // Charger les données pour cet enfant
     loadStudentData(firstStudent.id);
     loadSharedData(firstStudent.id);
   };
 
-  // Changement d'enfant via le sélecteur
   const handleSelectStudent = async (studentId) => {
     setSelectedStudentId(studentId);
     const selected = allStudents.find(s => s.id === studentId);
     if (!selected) return;
     setStudent(selected);
     setParentName(selected.parent_name || 'Parent');
-    // Recharger les données spécifiques à l'élève
     loadStudentData(studentId);
     loadSharedData(studentId);
   };
@@ -204,25 +144,16 @@ export default function ParentPortalPage() {
   };
 
   const loadSharedData = async (studentId) => {
-    const { data: notifs } = await supabase
-      .from('attendance_notifications')
-      .select('*')
-      .eq('student_id', studentId)
-      .order('created_at', { ascending: false })
-      .limit(5);
+    const { data: notifs } = await supabase.from('attendance_notifications').select('*').eq('student_id', studentId).order('created_at', { ascending: false }).limit(5);
     setNotifications(notifs || []);
 
-    const { data: justifs } = await supabase
-      .from('absence_justifications')
-      .select('*')
-      .eq('student_id', studentId)
-      .order('created_at', { ascending: false });
+    const { data: justifs } = await supabase.from('absence_justifications').select('*').eq('student_id', studentId).order('created_at', { ascending: false });
     setJustifications(justifs || []);
 
     fetchTerms();
   };
 
-  // ── Fonctions de données (inchangées) ────────────────────────────
+  // ── Fonctions de données ──────────────────────────────────────────
   const fetchBalance = async (studentId) => {
     const { data: studentData } = await supabase.from('students').select('class_id').eq('id', studentId).single();
     if (!studentData?.class_id) return;
@@ -261,11 +192,7 @@ export default function ParentPortalPage() {
   const fetchAttendance = async (studentId) => {
     const { data } = await supabase.from('attendance').select('status').eq('student_id', studentId);
     const counts = { present: 0, absent: 0, late: 0 };
-    (data || []).forEach(record => {
-      if (record.status === 'P') counts.present++;
-      else if (record.status === 'A') counts.absent++;
-      else if (record.status === 'L') counts.late++;
-    });
+    (data || []).forEach(record => { if (record.status === 'P') counts.present++; else if (record.status === 'A') counts.absent++; else if (record.status === 'L') counts.late++; });
     setAttendance(counts);
   };
 
@@ -329,23 +256,14 @@ export default function ParentPortalPage() {
     return (
       <div className="min-h-screen bg-gray-100 p-6">
         <div className="max-w-4xl mx-auto">
-          {/* En-tête avec sélecteur d'enfant si plusieurs */}
           <div className="flex justify-between items-center mb-6">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Welcome, {parentName}!</h1>
               {allStudents.length > 1 && (
                 <div className="mt-2 flex items-center gap-2">
                   <label className="text-sm text-gray-500">Your child:</label>
-                  <select
-                    value={selectedStudentId}
-                    onChange={e => handleSelectStudent(e.target.value)}
-                    className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    {allStudents.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.first_name} {s.last_name} ({s.classes?.name || 'No class'})
-                      </option>
-                    ))}
+                  <select value={selectedStudentId} onChange={e => handleSelectStudent(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    {allStudents.map(s => (<option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.classes?.name || 'No class'})</option>))}
                   </select>
                 </div>
               )}
@@ -358,7 +276,7 @@ export default function ParentPortalPage() {
             <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 hover:text-red-800"><LogOut size={18} /> Sign out</button>
           </div>
 
-          {/* Solde annuel */}
+          {/* Contenu identique aux versions précédentes */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📚 Your Child's School Fees ({ACADEMIC_YEAR})</h2>
             <div className="grid grid-cols-3 gap-4 text-center">
@@ -368,20 +286,15 @@ export default function ParentPortalPage() {
             </div>
           </div>
 
-          {/* Résumé par terme */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📅 Payment Summary by Term</h2>
             {termBalances.length === 0 ? <p className="text-gray-400 text-sm">Loading term details...</p> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b">
-                    <tr><th className="text-left px-4 py-2 font-semibold text-gray-600">Term</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Expected</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Paid</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Balance</th></tr>
-                  </thead>
+                  <thead className="bg-gray-50 border-b"><tr><th className="text-left px-4 py-2 font-semibold text-gray-600">Term</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Expected</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Paid</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Balance</th></tr></thead>
                   <tbody className="divide-y divide-gray-100">
                     {termBalances.map((tb) => (
-                      <tr key={tb.term} className="hover:bg-gray-50">
-                        <td className="px-4 py-2 font-medium">{tb.term}</td><td className="px-4 py-2 text-right">{formatGHS(tb.expected)}</td><td className="px-4 py-2 text-right text-green-600">{formatGHS(tb.paid)}</td><td className={`px-4 py-2 text-right font-semibold ${tb.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatGHS(tb.remaining)}</td>
-                      </tr>
+                      <tr key={tb.term} className="hover:bg-gray-50"><td className="px-4 py-2 font-medium">{tb.term}</td><td className="px-4 py-2 text-right">{formatGHS(tb.expected)}</td><td className="px-4 py-2 text-right text-green-600">{formatGHS(tb.paid)}</td><td className={`px-4 py-2 text-right font-semibold ${tb.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatGHS(tb.remaining)}</td></tr>
                     ))}
                   </tbody>
                 </table>
@@ -389,7 +302,6 @@ export default function ParentPortalPage() {
             )}
           </div>
 
-          {/* Présence */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📅 Attendance Summary</h2>
             <div className="grid grid-cols-3 gap-4 text-center">
@@ -399,22 +311,13 @@ export default function ParentPortalPage() {
             </div>
           </div>
 
-          {/* Bulletins */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📚 Terminal Reports</h2>
             {terms.length === 0 ? <p className="text-gray-400 text-sm">No terms available yet.</p> : (
-              <ul className="space-y-2">
-                {terms.map(term => (
-                  <li key={term.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
-                    <span className="font-medium">{term.name} ({term.academic_year})</span>
-                    <button onClick={() => handleGenerateReport(term.id)} className="text-blue-600 hover:text-blue-800 text-sm font-medium flex items-center gap-1"><FileText size={16} /> View Report</button>
-                  </li>
-                ))}
-              </ul>
+              <ul className="space-y-2">{terms.map(term => (<li key={term.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-lg"><span className="font-medium">{term.name} ({term.academic_year})</span><button onClick={() => handleGenerateReport(term.id)} className="text-blue-600 hover:text-blue-800 text-sm font-medium flex items-center gap-1"><FileText size={16} /> View Report</button></li>))}</ul>
             )}
           </div>
 
-          {/* Notifications */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">Recent Notifications</h2>
             {notifications.length === 0 ? <p className="text-gray-400">No recent notifications.</p> : (
@@ -422,7 +325,6 @@ export default function ParentPortalPage() {
             )}
           </div>
 
-          {/* Justificatifs */}
           <div className="bg-white rounded-xl shadow p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">Absence Justifications</h2>
@@ -456,7 +358,7 @@ export default function ParentPortalPage() {
     );
   }
 
-  // ── Vue non connectée ──────────────────────────────────────────────
+  // ── Vue non connectée (OTP uniquement) ──────────────────────────────
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm">
@@ -466,7 +368,7 @@ export default function ParentPortalPage() {
           <p className="text-sm text-gray-500">Sign in with your phone number</p>
         </div>
 
-        {!otpSent && !isNewUser && (
+        {!otpSent && (
           <form onSubmit={handleSendOtp} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
@@ -476,13 +378,10 @@ export default function ParentPortalPage() {
             <button type="submit" disabled={otpLoading} className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2">
               <Smartphone size={16} /> {otpLoading ? 'Sending code...' : 'Send OTP by SMS'}
             </button>
-            <p className="text-center text-xs text-gray-400 mt-4">
-              Already have a password? <button type="button" onClick={() => setOtpSent(null)} className="text-blue-600 hover:underline">Sign in here</button>
-            </p>
           </form>
         )}
 
-        {otpSent && !isNewUser && (
+        {otpSent && (
           <form onSubmit={handleVerifyOtp} className="space-y-4">
             <p className="text-sm text-gray-600 text-center">A verification code has been sent to <strong>{phone}</strong></p>
             <div>
@@ -494,40 +393,6 @@ export default function ParentPortalPage() {
               {otpLoading ? 'Verifying...' : 'Verify Code & Sign In'}
             </button>
             <button type="button" onClick={() => { setOtpSent(false); setOtp(''); setOtpError(''); }} className="w-full text-sm text-blue-600 hover:underline">Change phone number</button>
-          </form>
-        )}
-
-        {isNewUser && (
-          <form onSubmit={handleSetPassword} className="space-y-4">
-            <p className="text-sm text-gray-600 text-center">Welcome! Create a password for your next sign-ins.</p>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
-              <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Your password" className="w-full border rounded-lg px-3 py-2 text-sm" required minLength={6} />
-            </div>
-            {otpError && <p className="text-red-500 text-sm text-center">{otpError}</p>}
-            <button type="submit" disabled={passwordLoading} className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium disabled:opacity-50">
-              {passwordLoading ? 'Setting password...' : 'Set Password & Continue'}
-            </button>
-          </form>
-        )}
-
-        {otpSent === null && !isNewUser && (
-          <form onSubmit={handleSignIn} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-              <input type="tel" value={signInPhone} onChange={e => setSignInPhone(e.target.value)} placeholder="0538777840" className="w-full border rounded-lg px-3 py-2 text-sm" required />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-              <input type="password" value={signInPassword} onChange={e => setSignInPassword(e.target.value)} placeholder="Your password" className="w-full border rounded-lg px-3 py-2 text-sm" required />
-            </div>
-            {signInError && <p className="text-red-500 text-sm text-center">{signInError}</p>}
-            <button type="submit" disabled={signInLoading} className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium disabled:opacity-50">
-              {signInLoading ? 'Signing in...' : 'Sign In'}
-            </button>
-            <p className="text-center text-xs text-gray-400 mt-4">
-              <button type="button" onClick={() => { setOtpSent(false); setSignInError(''); }} className="text-blue-600 hover:underline">First time? Get an OTP</button>
-            </p>
           </form>
         )}
       </div>
