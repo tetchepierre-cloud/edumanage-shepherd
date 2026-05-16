@@ -49,7 +49,7 @@ export default function ParentPortalPage() {
     setSchoolConfig({ name: cfg.school_name || 'School Name', address: cfg.address || '', phone: cfg.phone || '', email: cfg.email || '', logo: cfg.logo || null });
   };
 
-  // ── OTP handlers ──────────────────────────────────────────────────
+  // ── Étape 1 : Validation du numéro AVANT envoi OTP ─────────────────
   const handleSendOtp = async (e) => {
     e.preventDefault();
     setOtpLoading(true);
@@ -62,6 +62,20 @@ export default function ParentPortalPage() {
       ? '+' + cleaned
       : '+233' + cleaned;
 
+    // Vérifier que le numéro existe dans students
+    const { data: studentData, error: studentError } = await supabase
+      .from('students')
+      .select('id')
+      .eq('parent_phone', cleaned)
+      .maybeSingle();
+
+    if (studentError || !studentData) {
+      setOtpError('This phone number is not registered in our system. Please contact the school.');
+      setOtpLoading(false);
+      return;
+    }
+
+    // Numéro valide → envoyer OTP
     const { error } = await supabase.auth.signInWithOtp({
       phone: formattedPhone,
       options: { shouldCreateUser: true, data: { phone: cleaned } },
@@ -72,6 +86,7 @@ export default function ParentPortalPage() {
     setOtpLoading(false);
   };
 
+  // ── Vérification OTP ──────────────────────────────────────────────
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     setOtpLoading(true);
@@ -102,16 +117,17 @@ export default function ParentPortalPage() {
     setOtpLoading(false);
   };
 
-  // ── Chargement des enfants et données ─────────────────────────────
+  // ── Chargement des enfants après connexion ────────────────────────
   const handleLoggedIn = async (currentSession) => {
     setSession(currentSession);
-    const parentPhone = currentSession.user.phone || currentSession.user.user_metadata?.phone;
-    if (!parentPhone) return;
+    // Récupérer le numéro de téléphone depuis auth.users.phone
+    const userPhone = currentSession.user.phone;
+    if (!userPhone) return;
 
     const { data: studentsData } = await supabase
       .from('students')
       .select('id, first_name, last_name, class_id, parent_name, classes(name)')
-      .eq('parent_phone', parentPhone)
+      .eq('parent_phone', userPhone)
       .eq('active', true)
       .order('last_name');
 
@@ -276,7 +292,7 @@ export default function ParentPortalPage() {
             <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 hover:text-red-800"><LogOut size={18} /> Sign out</button>
           </div>
 
-          {/* Contenu identique aux versions précédentes */}
+          {/* Soldes, etc. (inchangé) */}
           <div className="bg-white rounded-xl shadow p-6 mb-6">
             <h2 className="text-lg font-semibold mb-4">📚 Your Child's School Fees ({ACADEMIC_YEAR})</h2>
             <div className="grid grid-cols-3 gap-4 text-center">
@@ -293,9 +309,7 @@ export default function ParentPortalPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b"><tr><th className="text-left px-4 py-2 font-semibold text-gray-600">Term</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Expected</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Paid</th><th className="text-right px-4 py-2 font-semibold text-gray-600">Balance</th></tr></thead>
                   <tbody className="divide-y divide-gray-100">
-                    {termBalances.map((tb) => (
-                      <tr key={tb.term} className="hover:bg-gray-50"><td className="px-4 py-2 font-medium">{tb.term}</td><td className="px-4 py-2 text-right">{formatGHS(tb.expected)}</td><td className="px-4 py-2 text-right text-green-600">{formatGHS(tb.paid)}</td><td className={`px-4 py-2 text-right font-semibold ${tb.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatGHS(tb.remaining)}</td></tr>
-                    ))}
+                    {termBalances.map((tb) => (<tr key={tb.term} className="hover:bg-gray-50"><td className="px-4 py-2 font-medium">{tb.term}</td><td className="px-4 py-2 text-right">{formatGHS(tb.expected)}</td><td className="px-4 py-2 text-right text-green-600">{formatGHS(tb.paid)}</td><td className={`px-4 py-2 text-right font-semibold ${tb.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatGHS(tb.remaining)}</td></tr>))}
                   </tbody>
                 </table>
               </div>
@@ -358,7 +372,7 @@ export default function ParentPortalPage() {
     );
   }
 
-  // ── Vue non connectée (OTP uniquement) ──────────────────────────────
+  // ── Vue non connectée ──────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm">
