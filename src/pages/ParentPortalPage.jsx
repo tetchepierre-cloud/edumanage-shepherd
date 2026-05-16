@@ -103,7 +103,7 @@ export default function ParentPortalPage() {
 
     const { data: studentData } = await supabase
       .from('students')
-      .select('first_name, last_name, class_id, parent_name, classes(name)')
+      .select('id, first_name, last_name, class_id, parent_name, classes(name)')
       .eq('id', studentId)
       .maybeSingle();
 
