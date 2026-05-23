@@ -7,6 +7,7 @@ import { generateFeesReport } from '../lib/feesReportGenerator'
 import { generateStudentStatement } from '../lib/statementGenerator'
 import { generateDiscountReport } from '../lib/discountReportGenerator'
 import { generateClassBalanceReport } from '../lib/classBalanceReportGenerator'
+import { sendSMS, formatPaymentSMS } from '../lib/sms'
 import { CanAct, CanSee } from '../components/PermissionGate'
 
 const PAYMENT_TYPES  = ['Tuition', 'Uniform', 'Books', 'Exam', 'Other']
@@ -28,7 +29,7 @@ export default function FeesPage() {
   const [filterClass,  setFilterClass]  = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterYear,   setFilterYear]   = useState('')
-  const [filterTerm,   setFilterTerm]   = useState('')   // ← nouveau filtre
+  const [filterTerm,   setFilterTerm]   = useState('')
   const [studentSearch, setStudentSearch] = useState('')
 
   const [feeLines, setFeeLines] = useState([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
@@ -119,7 +120,7 @@ export default function FeesPage() {
   const fetchStudents = async () => {
     const { data } = await supabase
       .from('students')
-      .select('id, first_name, last_name, class_id, classes(name)')
+      .select('id, first_name, last_name, class_id, parent_phone, classes(name)')
       .order('first_name')
     setStudents(data || [])
   }
@@ -161,18 +162,14 @@ export default function FeesPage() {
     )
   }
 
-  // === FONCTIONS MODIFIÉES POUR LE TERME ===
-
+  // === FONCTIONS POUR LE TERME ===
   const getExpectedFeeItems = async (studentId, academicYear, term) => {
     const { data: student, error: studentErr } = await supabase
       .from('students')
       .select('class_id, classes(name)')
       .eq('id', studentId)
       .single()
-    if (studentErr || !student?.classes) {
-      console.warn('Classe introuvable pour l’élève', studentId)
-      return []
-    }
+    if (studentErr || !student?.classes) return []
     const className = student.classes.name.trim()
     const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
     const { data: levelData, error: levelErr } = await supabase
@@ -180,10 +177,7 @@ export default function FeesPage() {
       .select('id')
       .ilike('name', levelName)
       .maybeSingle()
-    if (levelErr || !levelData) {
-      console.warn('Niveau introuvable pour', levelName, 'levelData:', levelData, 'levelErr:', levelErr)
-      return []
-    }
+    if (levelErr || !levelData) return []
     const levelId = levelData.id
     let query = supabase
       .from('fee_structure')
@@ -191,32 +185,22 @@ export default function FeesPage() {
       .eq('level_id', levelId)
       .eq('academic_year', academicYear)
       .eq('is_active', true)
-    if (term) {
-      query = query.eq('term', term)
-    }
+    if (term) query = query.eq('term', term)
     const { data: fees, error: feesErr } = await query.order('is_mandatory', { ascending: false })
-    if (feesErr || !fees || fees.length === 0) {
-      console.warn('Aucun frais trouvé pour level_id', levelId, 'et année', academicYear, 'et terme', term)
-      return []
-    }
+    if (feesErr || !fees || fees.length === 0) return []
     const { data: discounts } = await supabase
       .from('student_fee_discounts')
       .select('fee_structure_id, discount_type, discount_value')
       .eq('student_id', studentId)
     const discountMap = {}
-    ;(discounts || []).forEach(d => {
-      discountMap[d.fee_structure_id] = d
-    })
+    ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
     return fees.map(f => {
       let originalAmount = parseFloat(f.amount)
       let finalAmount = originalAmount
       const discount = discountMap[f.id]
       if (discount) {
-        if (discount.discount_type === 'fixed') {
-          finalAmount = Math.max(0, originalAmount - parseFloat(discount.discount_value))
-        } else {
-          finalAmount = originalAmount * (1 - parseFloat(discount.discount_value) / 100)
-        }
+        if (discount.discount_type === 'fixed') finalAmount = Math.max(0, originalAmount - parseFloat(discount.discount_value))
+        else finalAmount = originalAmount * (1 - parseFloat(discount.discount_value) / 100)
       }
       return {
         description: `${f.fee_name} (${f.fee_type})`,
@@ -333,24 +317,17 @@ export default function FeesPage() {
       if (p.fee_items && Array.isArray(p.fee_items) && p.fee_items.length > 0) {
         p.fee_items.forEach(fi => {
           const fee = fees.find(f => f.fee_name === fi.type)
-          if (fee) {
-            totalPaidRequired += parseFloat(fi.amount || 0)
-          }
+          if (fee) totalPaidRequired += parseFloat(fi.amount || 0)
         })
       } else {
-        const fee = fees.find(f => f.fee_name === p.payment_type) ||
-                    fees.find(f => f.fee_type === p.payment_type)
-        if (fee) {
-          totalPaidRequired += parseFloat(p.amount || 0)
-        }
+        const fee = fees.find(f => f.fee_name === p.payment_type) || fees.find(f => f.fee_type === p.payment_type)
+        if (fee) totalPaidRequired += parseFloat(p.amount || 0)
       }
     })
     const newActive = totalPaidRequired >= minPayment
     await supabase.from('students').update({ active: newActive }).eq('id', studentId)
     setStudents(prev => prev.map(s => s.id === studentId ? { ...s, active: newActive } : s))
   }
-
-  // === FIN FONCTIONS MODIFIÉES ===
 
   const openAddForm = async () => {
     await fetchStudents()
@@ -404,827 +381,259 @@ export default function FeesPage() {
   }
 
   const handlePrintReceipt = async (payment) => {
-    const expectedItems = await getExpectedFeeItems(
-      payment.student_id,
-      payment.academic_year || '2025/2026',
-      payment.term || 'Term 1'
-    )
+    const expectedItems = await getExpectedFeeItems(payment.student_id, payment.academic_year || '2025/2026', payment.term || 'Term 1')
     let feeItems = []
     const amountPaid = parseFloat(payment.amount || 0)
     if (payment.fee_items && Array.isArray(payment.fee_items) && payment.fee_items.length > 0) {
-      feeItems = payment.fee_items.map(fi => ({
-        description: fi.type,
-        expected: parseFloat(fi.amount || 0),
-        paid: parseFloat(fi.amount || 0),
-      }))
+      feeItems = payment.fee_items.map(fi => ({ description: fi.type, expected: parseFloat(fi.amount || 0), paid: parseFloat(fi.amount || 0) }))
     } else if (expectedItems.length > 0) {
       let remaining = amountPaid
       feeItems = expectedItems.map((item, idx) => {
         let paid = 0
-        if (idx === 0) {
-          paid = Math.min(remaining, item.expected)
-          remaining -= paid
-        } else if (remaining > 0) {
-          paid = Math.min(remaining, item.expected)
-          remaining -= paid
-        }
+        if (idx === 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
+        else if (remaining > 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
         return { description: item.description, expected: item.expected, paid }
       })
-      if (remaining > 0) {
-        feeItems.push({ description: 'Overpayment', expected: 0, paid: remaining })
-      }
+      if (remaining > 0) feeItems.push({ description: 'Overpayment', expected: 0, paid: remaining })
     } else {
-      feeItems = [{
-        description: `${payment.payment_type} (${payment.academic_year})`,
-        expected: amountPaid,
-        paid: amountPaid,
-      }]
+      feeItems = [{ description: `${payment.payment_type} (${payment.academic_year})`, expected: amountPaid, paid: amountPaid }]
     }
-    await printReceipt(
-      { ...payment, feeItems, collected_by_name: payment.collected_by_name || 'Accountant' },
-      schoolConfig
-    )
+    await printReceipt({ ...payment, feeItems, collected_by_name: payment.collected_by_name || 'Accountant' }, schoolConfig)
   }
 
   const handleGenerateReport = () => setShowReportModal(true)
+
   const handleOpenStatementModal = () => {
     setStatementSearch('')
     setStatementStudent(null)
-    setStatementParams({
-      academicYear: '2025/2026',
-      periodType: '1',
-      term: '',
-      customFrom: '',
-      customTo: '',
-    })
+    setStatementParams({ academicYear: '2025/2026', periodType: '1', term: '', customFrom: '', customTo: '' })
     setShowStatementModal(true)
   }
+
   const handleOpenDiscountReport = () => setShowDiscountReportModal(true)
 
   const handleSave = async (e) => {
-    e.preventDefault()
-    setSaving(true)
-    setMessage('')
-    if (!form.student_id) {
-      setMessage('❌ Please select a student.')
+  e.preventDefault()
+  setSaving(true)
+  setMessage('')
+  
+  if (!form.student_id) { 
+    setMessage('❌ Please select a student.')
+    setSaving(false)
+    return 
+  }
+  
+  const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
+  const validLines = feeLines.filter(l => parseFloat(l.amount) > 0)
+  
+  if (validLines.length === 0) { 
+    setMessage('❌ Add at least one fee item with amount > 0.')
+    setSaving(false)
+    return 
+  }
+  
+  for (const line of validLines) {
+    const remaining = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
+    if (remaining && parseFloat(line.amount) > remaining.remaining) {
+      setMessage(`❌ Amount for ${line.type} exceeds remaining balance (${formatAmount(remaining.remaining)}).`)
       setSaving(false)
       return
-    }
-    const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
-    const validLines = feeLines.filter(l => parseFloat(l.amount) > 0)
-    if (validLines.length === 0) {
-      setMessage('❌ Add at least one fee item with amount > 0.')
-      setSaving(false)
-      return
-    }
-    for (const line of validLines) {
-      const remaining = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
-      if (remaining && parseFloat(line.amount) > remaining.remaining) {
-        setMessage(`❌ Amount for ${line.type} exceeds remaining balance (${formatAmount(remaining.remaining)}).`)
-        setSaving(false)
-        return
-      }
-    }
-    const totalAmount = validLines.reduce((sum, l) => sum + parseFloat(l.amount), 0)
-    const receiptNum = editPayment ? form.receipt_number.trim() : await generateReceiptNumber()
-    const payload = {
-      student_id:     form.student_id,
-      amount:         totalAmount,
-      payment_type:   validLines.length > 1 ? 'Multiple' : validLines[0].type,
-      payment_method: form.payment_method,
-      receipt_number: receiptNum,
-      status:         'partial',
-      academic_year:  form.academic_year,
-      term:           form.term,
-      payment_date:   form.payment_date,
-      notes:          form.notes.trim() || null,
-      fee_items:      validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
-    }
-    try {
-      if (editPayment) {
-        const oldPayment = payments.find(p => p.id === editPayment.id)
-        const { data, error } = await supabase
-          .from('fee_payments')
-          .update(payload)
-          .eq('id', editPayment.id)
-          .select()
-          .single()
-        if (error) throw error
-        await logAction({
-          action:      'UPDATE',
-          tableName:   'fee_payments',
-          recordId:    data.id,
-          oldData:     oldPayment,
-          newData:     data,
-          description: `Updated fee payment — ${data.payment_type} GHS ${data.amount} `
-                     + `(${data.academic_year}, ${data.term}) · Receipt: ${data.receipt_number}`,
-        })
-        await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
-        setMessage('✅ Payment updated successfully!')
-        await fetchPayments()
-        setTimeout(() => setShowForm(false), 1200)
-      } else {
-        const { data, error } = await supabase
-          .from('fee_payments')
-          .insert([payload])
-          .select()
-          .single()
-        if (error) throw error
-        const student = students.find(s => s.id === data.student_id)
-        const studentName = student
-          ? `${student.first_name} ${student.last_name}`
-          : 'Unknown student'
-        await logAction({
-          action:      'CREATE',
-          tableName:   'fee_payments',
-          recordId:    data.id,
-          oldData:     null,
-          newData:     data,
-          description: `Fee payment recorded — ${studentName} · ${data.payment_type} `
-                     + `GHS ${data.amount} · ${data.status} · ${data.academic_year} `
-                     + `· ${data.term} · Receipt: ${data.receipt_number}`,
-        })
-        await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
-        const { data: fullPayment } = await supabase
-          .from('fee_payments')
-          .select('*, students(first_name, last_name, class_id, classes(name))')
-          .eq('id', data.id)
-          .single()
-        if (fullPayment) {
-          const feeItems = validLines.map(l => ({
-            description: l.type,
-            expected: parseFloat(l.amount),
-            paid: parseFloat(l.amount),
-          }))
-          const { data: { user } } = await supabase.auth.getUser()
-          let collectorName = 'Accountant'
-          if (user) {
-            const { data: profile } = await supabase
-              .from('profiles')
-              .select('full_name')
-              .eq('id', user.id)
-              .single()
-            collectorName = profile?.full_name || 'Accountant'
-          }
-          await printReceipt(
-            { ...fullPayment, feeItems, collected_by_name: collectorName },
-            schoolConfig
-          )
-        }
-        setMessage('✅ Payment recorded & receipt printed!')
-        await fetchPayments()
-        setTimeout(() => setShowForm(false), 1200)
-      }
-    } catch (err) {
-      setMessage(`❌ Error: ${err.message}`)
-    } finally {
-      setSaving(false)
     }
   }
+  
+  const totalAmount = validLines.reduce((sum, l) => sum + parseFloat(l.amount), 0)
+  const receiptNum = editPayment ? form.receipt_number.trim() : await generateReceiptNumber()
+  
+  const payload = {
+    student_id: form.student_id, 
+    amount: totalAmount,
+    payment_type: validLines.length > 1 ? 'Multiple' : validLines[0].type,
+    payment_method: form.payment_method, 
+    receipt_number: receiptNum, 
+    status: 'partial',
+    academic_year: form.academic_year, 
+    term: form.term, 
+    payment_date: form.payment_date,
+    notes: form.notes.trim() || null, 
+    fee_items: validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
+  }
+  
+  try {
+    if (editPayment) {
+      const oldPayment = payments.find(p => p.id === editPayment.id)
+      const { data, error } = await supabase.from('fee_payments').update(payload).eq('id', editPayment.id).select().single()
+      if (error) throw error
+      
+      await logAction({ action: 'UPDATE', tableName: 'fee_payments', recordId: data.id, oldData: oldPayment, newData: data, description: `Updated fee payment — ${data.payment_type} GHS ${data.amount} (${data.academic_year}, ${data.term}) · Receipt: ${data.receipt_number}` })
+      await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
+      
+      setMessage('✅ Payment updated successfully!')
+      await fetchPayments()
+      setTimeout(() => setShowForm(false), 1200)
+      
+    } else {
+      const { data, error } = await supabase.from('fee_payments').insert([payload]).select().single()
+      if (error) throw error
+      
+      const student = students.find(s => s.id === data.student_id)
+      const studentName = student ? `${student.first_name} ${student.last_name}` : 'Unknown student'
+      
+      await logAction({ action: 'CREATE', tableName: 'fee_payments', recordId: data.id, oldData: null, newData: data, description: `Fee payment recorded — ${studentName} · ${data.payment_type} GHS ${data.amount} · ${data.status} · ${data.academic_year} · ${data.term} · Receipt: ${data.receipt_number}` })
+      await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
+      
+      const { data: fullPayment } = await supabase.from('fee_payments').select('*, students(first_name, last_name, class_id, parent_phone, classes(name))').eq('id', data.id).single()
+      
+      if (fullPayment) {
+  // ── ENVOI DU SMS SÉCURISÉ AVEC LE VRAI SOLDE DU TRIMESTRE ──
+  const studentPhone = fullPayment.students?.parent_phone || student?.parent_phone;
+  
+  if (studentPhone) {
+    // 1. Calcul du solde total du trimestre AVANT le paiement actuel
+    const totalRemainingBefore = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0);
+    
+    // 2. Déduction du paiement actuel pour obtenir le VRAI solde restant après transaction
+    const actualBalanceAfter = Math.max(0, totalRemainingBefore - totalAmount);
+
+    // 3. Formatage du message avec les valeurs nettoyées (2 décimales)
+    const smsMessage = formatPaymentSMS(
+      studentName, 
+      totalAmount.toFixed(2), 
+      receiptNum, 
+      actualBalanceAfter.toFixed(2),
+      form.term
+    );
+    
+    console.log(`[Système SMS] Envoi du reçu marketing à ${studentPhone}...`);
+    
+    // Attente stricte de l'Edge function
+    const smsResult = await sendSMS(studentPhone, smsMessage);
+    
+    if (!smsResult.success) {
+      console.error("[Système SMS] Échec de transmission via Hubtel:", smsResult.error);
+    } else {
+      console.log("[Système SMS] Transmission confirmée avec succès.");
+    }
+  }
+
+  // ── GÉNÉRATION ET IMPRESSION DU REÇU PAPIER ──
+  const feeItems = validLines.map(l => ({ description: l.type, expected: parseFloat(l.amount), paid: parseFloat(l.amount) }))
+  const { data: { user } } = await supabase.auth.getUser()
+  
+  let collectorName = 'Accountant'
+  if (user) { 
+    const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).single()
+    collectorName = profile?.full_name || 'Accountant' 
+  }
+  
+  await printReceipt({ ...fullPayment, feeItems, collected_by_name: collectorName }, schoolConfig)
+}
+      
+      setMessage('✅ Payment recorded, SMS sent & receipt printed!')
+      await fetchPayments()
+      setTimeout(() => setShowForm(false), 1200)
+    }
+  } catch (err) { 
+    setMessage(`❌ Error: ${err.message}`) 
+  } finally { 
+    setSaving(false) 
+  }
+}
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this payment record?')) return
     const paymentToDelete = payments.find(p => p.id === id)
     const student = students.find(s => s.id === paymentToDelete?.student_id)
-    const studentName = student
-      ? `${student.first_name} ${student.last_name}`
-      : 'Unknown student'
-    const { error } = await supabase
-      .from('fee_payments')
-      .delete()
-      .eq('id', id)
+    const studentName = student ? `${student.first_name} ${student.last_name}` : 'Unknown student'
+    const { error } = await supabase.from('fee_payments').delete().eq('id', id)
     if (!error) {
-      await logAction({
-        action:      'DELETE',
-        tableName:   'fee_payments',
-        recordId:    id,
-        oldData:     paymentToDelete,
-        newData:     null,
-        description: `Deleted fee payment — ${studentName} · `
-                   + `${paymentToDelete?.payment_type} GHS ${paymentToDelete?.amount} `
-                   + `· Receipt: ${paymentToDelete?.receipt_number}`,
-      })
+      await logAction({ action: 'DELETE', tableName: 'fee_payments', recordId: id, oldData: paymentToDelete, newData: null, description: `Deleted fee payment — ${studentName} · ${paymentToDelete?.payment_type} GHS ${paymentToDelete?.amount} · Receipt: ${paymentToDelete?.receipt_number}` })
       setPayments(prev => prev.filter(p => p.id !== id))
-    } else {
-      setMessage(`❌ Error: ${error.message}`)
-    }
+    } else { setMessage(`❌ Error: ${error.message}`) }
   }
 
   const filtered = payments.filter(p => {
     const fullName = `${p.students?.first_name} ${p.students?.last_name}`.toLowerCase()
-    const matchSearch  = fullName.includes(search.toLowerCase()) ||
-                         p.receipt_number?.toLowerCase().includes(search.toLowerCase())
-    const matchClass   = filterClass  ? p.students?.class_id === filterClass  : true
-    const matchStatus  = filterStatus ? p.status          === filterStatus     : true
-    const matchYear    = filterYear   ? p.academic_year   === filterYear       : true
-    const matchTerm    = filterTerm   ? p.term            === filterTerm       : true   // ← ajouté
+    const matchSearch = fullName.includes(search.toLowerCase()) || p.receipt_number?.toLowerCase().includes(search.toLowerCase())
+    const matchClass = filterClass ? p.students?.class_id === filterClass : true
+    const matchStatus = filterStatus ? p.status === filterStatus : true
+    const matchYear = filterYear ? p.academic_year === filterYear : true
+    const matchTerm = filterTerm ? p.term === filterTerm : true
     return matchSearch && matchClass && matchStatus && matchYear && matchTerm
   })
 
-  const totalCollected = filtered
-    .filter(p => p.status === 'paid')
-    .reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
-  const totalPending = filtered
-    .filter(p => p.status === 'pending')
-    .reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
-  const totalPartial = filtered
-    .filter(p => p.status === 'partial')
-    .reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
+  const totalCollected = filtered.filter(p => p.status === 'paid').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
+  const totalPending = filtered.filter(p => p.status === 'pending').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
+  const totalPartial = filtered.filter(p => p.status === 'partial').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
 
   useEffect(() => {
     if (form.student_id && form.academic_year && form.term) {
-      getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
-        .then(remaining => {
-          if (remaining && remaining.length > 0) {
-            setFeeLines(remaining.map(r => ({
-              type: r.type,
-              amount: '',
-              max: r.remaining,
-              label: r.label,
-              remaining: r.remaining,
-              locked: true,
-              feeStructureId: r.feeStructureId
-            })))
-          } else {
-            setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
-          }
-        })
-      getPreviousTermsArrears(form.student_id, form.academic_year, form.term)
-        .then(total => setArrears(total))
-        .catch(() => setArrears(0))
+      getRemainingFeesForStudent(form.student_id, form.academic_year, form.term).then(remaining => {
+        if (remaining && remaining.length > 0) {
+          setFeeLines(remaining.map(r => ({ type: r.type, amount: '', max: r.remaining, label: r.label, remaining: r.remaining, locked: true, feeStructureId: r.feeStructureId })))
+        } else { setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }]) }
+      })
+      getPreviousTermsArrears(form.student_id, form.academic_year, form.term).then(total => setArrears(total)).catch(() => setArrears(0))
     }
   }, [form.term, form.student_id, form.academic_year])
 
   return (
     <div className="p-6 space-y-6">
-
       <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Fee Payments</h2>
-          <p className="text-gray-500 text-sm">{payments.length} payment records</p>
-        </div>
+        <div><h2 className="text-2xl font-bold text-gray-900">Fee Payments</h2><p className="text-gray-500 text-sm">{payments.length} payment records</p></div>
         <div className="flex items-center gap-2">
-          <CanAct module="fees" section="header" element="Record Payment button">
-            <button onClick={openAddForm} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2">➕ Record Payment</button>
-          </CanAct>
-          <CanAct module="fees" section="header" element="Fees Report button">
-            <button onClick={handleGenerateReport} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Fees Collection Report">📊 Fees Report</button>
-          </CanAct>
-          <CanAct module="fees" section="header" element="Student Statement button">
-            <button onClick={handleOpenStatementModal} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Student Statement">📄 Statement</button>
-          </CanAct>
-          <CanAct module="fees" section="header" element="Discounts button">
-            <button onClick={handleOpenDiscountReport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Discount Report">🏷️ Discounts</button>
-          </CanAct>
-          <CanAct module="fees" section="header" element="Class Balance button">
-            <button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Class Balance Report">📊 Class Balance</button>
-          </CanAct>
+          <CanAct module="fees" section="header" element="Record Payment button"><button onClick={openAddForm} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2">➕ Record Payment</button></CanAct>
+          <CanAct module="fees" section="header" element="Fees Report button"><button onClick={handleGenerateReport} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Fees Collection Report">📊 Fees Report</button></CanAct>
+          <CanAct module="fees" section="header" element="Student Statement button"><button onClick={handleOpenStatementModal} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Student Statement">📄 Statement</button></CanAct>
+          <CanAct module="fees" section="header" element="Discounts button"><button onClick={handleOpenDiscountReport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Discount Report">🏷️ Discounts</button></CanAct>
+          <CanAct module="fees" section="header" element="Class Balance button"><button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Class Balance Report">📊 Class Balance</button></CanAct>
         </div>
       </div>
 
-      {message && !showForm && (
-        <div className={`px-4 py-3 rounded-lg text-sm font-medium ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>
-      )}
+      {message && !showForm && (<div className={`px-4 py-3 rounded-lg text-sm font-medium ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>)}
 
       <CanSee module="fees" section="summary" element="Status cards">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-green-500">
-            <p className="text-sm text-gray-500 font-medium">Fully Paid</p>
-            <p className="text-2xl font-bold text-green-600 mt-1">{formatAmount(totalCollected)}</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-yellow-500">
-            <p className="text-sm text-gray-500 font-medium">Pending</p>
-            <p className="text-2xl font-bold text-yellow-600 mt-1">{formatAmount(totalPending)}</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-orange-500">
-            <p className="text-sm text-gray-500 font-medium">Partial</p>
-            <p className="text-2xl font-bold text-orange-600 mt-1">{formatAmount(totalPartial)}</p>
-          </div>
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-green-500"><p className="text-sm text-gray-500 font-medium">Fully Paid</p><p className="text-2xl font-bold text-green-600 mt-1">{formatAmount(totalCollected)}</p></div>
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-yellow-500"><p className="text-sm text-gray-500 font-medium">Pending</p><p className="text-2xl font-bold text-yellow-600 mt-1">{formatAmount(totalPending)}</p></div>
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-orange-500"><p className="text-sm text-gray-500 font-medium">Partial</p><p className="text-2xl font-bold text-orange-600 mt-1">{formatAmount(totalPartial)}</p></div>
         </div>
       </CanSee>
 
       <div className="bg-white rounded-xl shadow-sm p-4 flex flex-wrap gap-3">
-        <CanSee module="fees" section="filters" element="Search field">
-          <input type="text" placeholder="🔍 Search student or receipt..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 min-w-48 px-4 py-2 border border-gray-300 rounded-lg text-sm" />
-        </CanSee>
-        <CanSee module="fees" section="filters" element="Class select">
-          <select value={filterClass} onChange={e => setFilterClass(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-            <option value="">All Classes</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </CanSee>
-        <CanSee module="fees" section="filters" element="Status select">
-          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-            <option value="">All Status</option>
-            {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-          </select>
-        </CanSee>
-        <CanSee module="fees" section="filters" element="Year select">
-          <select value={filterYear} onChange={e => setFilterYear(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-            <option value="">All Years</option>
-            {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </CanSee>
-        {/* Nouveau filtre par terme */}
-        <CanSee module="fees" section="filters" element="Term select">
-          <select value={filterTerm} onChange={e => setFilterTerm(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-            <option value="">All Terms</option>
-            <option value="Term 1">Term 1</option>
-            <option value="Term 2">Term 2</option>
-            <option value="Term 3">Term 3</option>
-          </select>
-        </CanSee>
-        <button onClick={() => { setSearch(''); setFilterClass(''); setFilterStatus(''); setFilterYear(''); setFilterTerm(''); }} className="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
-          Clear
-        </button>
+        <CanSee module="fees" section="filters" element="Search field"><input type="text" placeholder="🔍 Search student or receipt..." value={search} onChange={e => setSearch(e.target.value)} className="flex-1 min-w-48 px-4 py-2 border border-gray-300 rounded-lg text-sm" /></CanSee>
+        <CanSee module="fees" section="filters" element="Class select"><select value={filterClass} onChange={e => setFilterClass(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Classes</option>{classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></CanSee>
+        <CanSee module="fees" section="filters" element="Status select"><select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}</select></CanSee>
+        <CanSee module="fees" section="filters" element="Year select"><select value={filterYear} onChange={e => setFilterYear(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Years</option>{ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></CanSee>
+        <CanSee module="fees" section="filters" element="Term select"><select value={filterTerm} onChange={e => setFilterTerm(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Terms</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></CanSee>
+        <button onClick={() => { setSearch(''); setFilterClass(''); setFilterStatus(''); setFilterYear(''); setFilterTerm(''); }} className="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Clear</button>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm overflow-auto max-h-[65vh]">
         <CanSee module="fees" section="table" element="Payment rows">
-          {loading ? (
-            <div className="text-center py-12"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3" /><p className="text-gray-500">Loading payments...</p></div>
-          ) : filtered.length === 0 ? (
-            <div className="text-center py-12"><p className="text-4xl mb-2">💳</p><p className="text-gray-500">No payment records found</p></div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b">
-                  <tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    <th className="px-6 py-4">#</th>
-                    <th className="px-6 py-4">Receipt</th>
-                    <th className="px-6 py-4">Student</th>
-                    <th className="px-6 py-4">Class</th>
-                    <th className="px-6 py-4">Type</th>
-                    <th className="px-6 py-4">Method</th>
-                    <th className="px-6 py-4">Amount</th>
-                    <th className="px-6 py-4">Status</th>
-                    <th className="px-6 py-4">Date</th>
-                    <th className="px-6 py-4">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filtered.map((payment, index) => (
-                    <tr key={payment.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 text-gray-400 text-sm">{index + 1}</td>
-                      <td className="px-6 py-4 text-xs font-mono text-gray-600">{payment.receipt_number}</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">{payment.students?.first_name} {payment.students?.last_name}</td>
-                      <td className="px-6 py-4 text-gray-600">{payment.students?.classes?.name || '—'}</td>
-                      <td className="px-6 py-4 text-gray-600">
-                        {payment.payment_type === 'Multiple' && payment.fee_items?.length
-                          ? payment.fee_items.map((fi, idx) => (<div key={idx}>{fi.type}</div>))
-                          : payment.payment_type}
-                      </td>
-                      <td className="px-6 py-4 text-gray-600">{payment.payment_method}</td>
-                      <td className="px-6 py-4 font-semibold text-gray-900">{formatAmount(payment.amount)}</td>
-                      <td className="px-6 py-4">{statusBadge(payment.status)}</td>
-                      <td className="px-6 py-4 text-gray-500 text-sm">
-                        {payment.payment_date ? formatDate(payment.payment_date) : formatDate(payment.created_at)}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex gap-2">
-                          <CanAct module="fees" section="table" element="Edit button">
-                            <button onClick={() => openEditForm(payment)} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-2 py-1 rounded hover:bg-blue-50">✏️ Edit</button>
-                          </CanAct>
-                          <CanAct module="fees" section="table" element="Print button">
-                            <button onClick={() => handlePrintReceipt(payment)} className="text-green-600 hover:text-green-800 text-sm font-medium px-2 py-1 rounded hover:bg-green-50">🖨️ Print</button>
-                          </CanAct>
-                          <CanAct module="fees" section="table" element="Delete button">
-                            <button onClick={() => handleDelete(payment.id)} className="text-red-500 hover:text-red-700 text-sm font-medium px-2 py-1 rounded hover:bg-red-50">🗑️ Del</button>
-                          </CanAct>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {loading ? (<div className="text-center py-12"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3" /><p className="text-gray-500">Loading payments...</p></div>) : filtered.length === 0 ? (<div className="text-center py-12"><p className="text-4xl mb-2">💳</p><p className="text-gray-500">No payment records found</p></div>) : (
+            <div className="overflow-x-auto"><table className="w-full"><thead className="bg-gray-50 border-b"><tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wide"><th className="px-6 py-4">#</th><th className="px-6 py-4">Receipt</th><th className="px-6 py-4">Student</th><th className="px-6 py-4">Class</th><th className="px-6 py-4">Type</th><th className="px-6 py-4">Method</th><th className="px-6 py-4">Amount</th><th className="px-6 py-4">Status</th><th className="px-6 py-4">Date</th><th className="px-6 py-4">Actions</th></tr></thead><tbody className="divide-y divide-gray-100">{filtered.map((payment, index) => (<tr key={payment.id} className="hover:bg-gray-50 transition-colors"><td className="px-6 py-4 text-gray-400 text-sm">{index + 1}</td><td className="px-6 py-4 text-xs font-mono text-gray-600">{payment.receipt_number}</td><td className="px-6 py-4 font-medium text-gray-900">{payment.students?.first_name} {payment.students?.last_name}</td><td className="px-6 py-4 text-gray-600">{payment.students?.classes?.name || '—'}</td><td className="px-6 py-4 text-gray-600">{payment.payment_type === 'Multiple' && payment.fee_items?.length ? payment.fee_items.map((fi, idx) => (<div key={idx}>{fi.type}</div>)) : payment.payment_type}</td><td className="px-6 py-4 text-gray-600">{payment.payment_method}</td><td className="px-6 py-4 font-semibold text-gray-900">{formatAmount(payment.amount)}</td><td className="px-6 py-4">{statusBadge(payment.status)}</td><td className="px-6 py-4 text-gray-500 text-sm">{payment.payment_date ? formatDate(payment.payment_date) : formatDate(payment.created_at)}</td><td className="px-6 py-4"><div className="flex gap-2"><CanAct module="fees" section="table" element="Edit button"><button onClick={() => openEditForm(payment)} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-2 py-1 rounded hover:bg-blue-50">✏️ Edit</button></CanAct><CanAct module="fees" section="table" element="Print button"><button onClick={() => handlePrintReceipt(payment)} className="text-green-600 hover:text-green-800 text-sm font-medium px-2 py-1 rounded hover:bg-green-50">🖨️ Print</button></CanAct><CanAct module="fees" section="table" element="Delete button"><button onClick={() => handleDelete(payment.id)} className="text-red-500 hover:text-red-700 text-sm font-medium px-2 py-1 rounded hover:bg-red-50">🗑️ Del</button></CanAct></div></td></tr>))}</tbody></table></div>
           )}
         </CanSee>
       </div>
 
       {showForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10">
-              <h3 className="text-lg font-bold text-gray-900">{editPayment ? '✏️ Edit Payment' : '➕ Record Payment'}</h3>
-              <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
-            </div>
-            <CanAct module="fees" section="modal" element="Payment form">
-              <form onSubmit={handleSave} className="p-6 space-y-4">
-                {message && (<div className={`px-4 py-3 rounded-lg text-sm font-medium ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>)}
-                <div className="relative">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Student <span className="text-red-500">*</span></label>
-                  <input type="text" placeholder="Type name to search..." value={studentSearch} onChange={e => { setStudentSearch(e.target.value); setForm(f => ({ ...f, student_id: '' })) }} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" autoComplete="off" />
-                  {studentSearch.length > 0 && form.student_id === '' && (
-                    <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto top-full">
-                      {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).slice(0, 10).map(s => (
-                        <div key={s.id} onClick={async () => { setForm(f => ({ ...f, student_id: s.id })); setStudentSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`); const remaining = await getRemainingFeesForStudent(s.id, form.academic_year, form.term); if (remaining && remaining.length > 0) { setFeeLines(remaining.map(r => ({ type: r.type, amount: '', max: r.remaining, label: r.label, remaining: r.remaining, locked: true, feeStructureId: r.feeStructureId }))) } else { setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }]) } }} className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0">
-                          <span className="font-medium">{s.first_name} {s.last_name}</span><span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span>
-                        </div>
-                      ))}
-                      {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).length === 0 && (<div className="px-3 py-2 text-sm text-gray-400">No student found</div>)}
-                    </div>
-                  )}
-                  {form.student_id && (<div className="mt-1 text-xs text-green-600 font-medium">✓ Student selected</div>)}
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                    <select value={form.academic_year} onChange={e => setForm(f => ({ ...f, academic_year: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                      {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Term</label>
-                    <select value={form.term} onChange={e => setForm(f => ({ ...f, term: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                      <option value="Term 1">Term 1</option>
-                      <option value="Term 2">Term 2</option>
-                      <option value="Term 3">Term 3</option>
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Fee Items</label>
-                  <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
-                    {feeLines.map((line, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <select value={line.type} onChange={e => updateFeeLine(idx, 'type', e.target.value)} disabled={line.locked} className={`flex-1 px-2 py-1 border rounded text-sm ${line.locked ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}>
-                          {PAYMENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                          {!PAYMENT_TYPES.includes(line.type) && (<option value={line.type}>{line.type}</option>)}
-                        </select>
-                        <input type="number" placeholder="0.00" value={line.amount} onChange={e => { const val = parseFloat(e.target.value) || 0; if (val > line.max) return; updateFeeLine(idx, 'amount', e.target.value) }} className="w-28 px-2 py-1 border border-gray-300 rounded text-sm" min="0" step="0.01" />
-                        {line.max > 0 && (<span className="text-xs text-gray-400">max {formatAmount(line.max)}</span>)}
-                        {!line.locked && feeLines.length > 1 && (<button type="button" onClick={() => removeFeeLine(idx)} className="text-red-500 hover:text-red-700 text-lg">×</button>)}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-2 text-right"><span className="text-sm font-bold text-gray-700">Total remaining: {formatAmount(feeLines.reduce((sum, l) => sum + (l.max || 0), 0))}</span></div>
-                  <button type="button" onClick={addFeeLine} className="mt-1 text-blue-600 hover:text-blue-800 text-sm">+ Add fee line</button>
-                </div>
-                {arrears > 0 && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-                    ⚠️ Outstanding balance from previous terms: <strong>{formatAmount(arrears)}</strong>
-                    <br /><span className="text-xs">This amount is not included in the current term fees and must be settled separately.</span>
-                  </div>
-                )}
-                <div className="bg-gray-50 rounded-lg p-3 text-right">
-                  <span className="text-sm font-semibold text-gray-700">Total: </span>
-                  <span className="text-lg font-bold text-blue-600">{formatAmount(feeLines.reduce((sum, l) => sum + parseFloat(l.amount || 0), 0))}</span>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
-                    <select value={form.payment_method} onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                      {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label>
-                    <input type="date" value={form.payment_date} onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Number</label>
-                    <input type="text" value={form.receipt_number} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono bg-gray-50 text-gray-500 cursor-not-allowed" />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
-                  <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none" placeholder="Any additional notes..." />
-                </div>
-                {editPayment && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                    <input type="text" value={form.status.charAt(0).toUpperCase() + form.status.slice(1)} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-not-allowed" />
-                  </div>
-                )}
-                <div className="flex gap-3 pt-2">
-                  <button type="button" onClick={() => setShowForm(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
-                  <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm disabled:opacity-50">
-                    {saving ? '⏳ Saving...' : editPayment ? '✅ Update' : '✅ Save Payment'}
-                  </button>
-                </div>
-              </form>
-            </CanAct>
-          </div>
-        </div>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"><div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10"><h3 className="text-lg font-bold text-gray-900">{editPayment ? '✏️ Edit Payment' : '➕ Record Payment'}</h3><button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button></div><CanAct module="fees" section="modal" element="Payment form"><form onSubmit={handleSave} className="p-6 space-y-4">{message && (<div className={`px-4 py-3 rounded-lg text-sm font-medium ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{message}</div>)}<div className="relative"><label className="block text-sm font-medium text-gray-700 mb-1">Student <span className="text-red-500">*</span></label><input type="text" placeholder="Type name to search..." value={studentSearch} onChange={e => { setStudentSearch(e.target.value); setForm(f => ({ ...f, student_id: '' })) }} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" autoComplete="off" />{studentSearch.length > 0 && form.student_id === '' && (<div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto top-full">{students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).slice(0, 10).map(s => (<div key={s.id} onClick={async () => { setForm(f => ({ ...f, student_id: s.id })); setStudentSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`); const remaining = await getRemainingFeesForStudent(s.id, form.academic_year, form.term); if (remaining && remaining.length > 0) { setFeeLines(remaining.map(r => ({ type: r.type, amount: '', max: r.remaining, label: r.label, remaining: r.remaining, locked: true, feeStructureId: r.feeStructureId }))) } else { setFeeLines([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }]) } }} className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0"><span className="font-medium">{s.first_name} {s.last_name}</span><span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span></div>))}{students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(studentSearch.toLowerCase())).length === 0 && (<div className="px-3 py-2 text-sm text-gray-400">No student found</div>)}</div>)}{form.student_id && (<div className="mt-1 text-xs text-green-600 font-medium">✓ Student selected</div>)}</div><div className="grid grid-cols-2 gap-3"><div><label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label><select value={form.academic_year} onChange={e => setForm(f => ({ ...f, academic_year: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">{ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Term</label><select value={form.term} onChange={e => setForm(f => ({ ...f, term: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></div></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Fee Items</label><div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">{feeLines.map((line, idx) => (<div key={idx} className="flex items-center gap-2"><select value={line.type} onChange={e => updateFeeLine(idx, 'type', e.target.value)} disabled={line.locked} className={`flex-1 px-2 py-1 border rounded text-sm ${line.locked ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}>{PAYMENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}{!PAYMENT_TYPES.includes(line.type) && (<option value={line.type}>{line.type}</option>)}</select><input type="number" placeholder="0.00" value={line.amount} onChange={e => { const val = parseFloat(e.target.value) || 0; if (val > line.max) return; updateFeeLine(idx, 'amount', e.target.value) }} className="w-28 px-2 py-1 border border-gray-300 rounded text-sm" min="0" step="0.01" />{line.max > 0 && (<span className="text-xs text-gray-400">max {formatAmount(line.max)}</span>)}{!line.locked && feeLines.length > 1 && (<button type="button" onClick={() => removeFeeLine(idx)} className="text-red-500 hover:text-red-700 text-lg">×</button>)}</div>))}</div><div className="mt-2 text-right"><span className="text-sm font-bold text-gray-700">Total remaining: {formatAmount(feeLines.reduce((sum, l) => sum + (l.max || 0), 0))}</span></div><button type="button" onClick={addFeeLine} className="mt-1 text-blue-600 hover:text-blue-800 text-sm">+ Add fee line</button></div>{arrears > 0 && (<div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">⚠️ Outstanding balance from previous terms: <strong>{formatAmount(arrears)}</strong><br /><span className="text-xs">This amount is not included in the current term fees and must be settled separately.</span></div>)}<div className="bg-gray-50 rounded-lg p-3 text-right"><span className="text-sm font-semibold text-gray-700">Total: </span><span className="text-lg font-bold text-blue-600">{formatAmount(feeLines.reduce((sum, l) => sum + parseFloat(l.amount || 0), 0))}</span></div><div className="grid grid-cols-3 gap-3"><div><label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label><select value={form.payment_method} onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">{PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label><input type="date" value={form.payment_date} onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Receipt Number</label><input type="text" value={form.receipt_number} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono bg-gray-50 text-gray-500 cursor-not-allowed" /></div></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label><textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none" placeholder="Any additional notes..." /></div>{editPayment && (<div><label className="block text-sm font-medium text-gray-700 mb-1">Status</label><input type="text" value={form.status.charAt(0).toUpperCase() + form.status.slice(1)} readOnly className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-not-allowed" /></div>)}<div className="flex gap-3 pt-2"><button type="button" onClick={() => setShowForm(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button><button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm disabled:opacity-50">{saving ? '⏳ Saving...' : editPayment ? '✅ Update' : '✅ Save Payment'}</button></div></form></CanAct></div></div>
       )}
 
       {showReportModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10">
-              <h3 className="text-lg font-bold text-gray-900">📊 Generate Fees Report</h3>
-              <button onClick={() => setShowReportModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                <select value={reportParams.academicYear} onChange={e => setReportParams({ ...reportParams, academicYear: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
-                <select value={reportTerm} onChange={e => setReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  <option value="">All Terms</option>
-                  <option value="Term 1">Term 1</option>
-                  <option value="Term 2">Term 2</option>
-                  <option value="Term 3">Term 3</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label>
-                <select value={reportParams.periodType} onChange={e => setReportParams({ ...reportParams, periodType: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  <option value="1">Academic Year (1 Sep – 30 Jun)</option>
-                  <option value="2">Month</option>
-                  <option value="3">Custom</option>
-                </select>
-              </div>
-              {reportParams.periodType === '2' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Month (MM/YYYY)</label>
-                  <input type="text" placeholder="MM/YYYY" value={reportParams.monthInput} onChange={e => setReportParams({ ...reportParams, monthInput: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-                </div>
-              )}
-              {reportParams.periodType === '3' && (
-                <>
-                  <div><label className="block text-sm font-medium text-gray-700 mb-1">Date from</label><input type="date" value={reportParams.customFrom} onChange={e => setReportParams({ ...reportParams, customFrom: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div>
-                  <div><label className="block text-sm font-medium text-gray-700 mb-1">Date to</label><input type="date" value={reportParams.customTo} onChange={e => setReportParams({ ...reportParams, customTo: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div>
-                </>
-              )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Table Type</label>
-                <select value={reportParams.tableType} onChange={e => setReportParams({ ...reportParams, tableType: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  <option value="1">By class</option>
-                  <option value="2">By student</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-2 mt-2">
-                <input type="checkbox" id="showOnlyActive" checked={showOnlyActive} onChange={e => setShowOnlyActive(e.target.checked)} className="h-4 w-4 text-blue-600 rounded" />
-                <label htmlFor="showOnlyActive" className="text-sm text-gray-700">Show only students with payment in period</label>
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowReportModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
-                <button type="button" onClick={async () => {
-                  let dateFrom, dateTo
-                  const y = parseInt(reportParams.academicYear.split('/')[0])
-                  if (reportParams.periodType === '1') {
-                    dateFrom = new Date(y, 8, 1)
-                    dateTo   = new Date(y + 1, 5, 30)
-                  } else if (reportParams.periodType === '2') {
-                    const [m, yyyy] = reportParams.monthInput.split('/').map(Number)
-                    dateFrom = new Date(yyyy, m - 1, 1)
-                    dateTo   = new Date(yyyy, m, 0, 23, 59, 59)
-                  } else {
-                    dateFrom = new Date(reportParams.customFrom)
-                    dateTo   = new Date(reportParams.customTo)
-                  }
-                  setShowReportModal(false)
-                  await generateFeesReport({
-                    academicYear: reportParams.academicYear,
-                    dateFrom,
-                    dateTo,
-                    tableType: reportParams.tableType === '2' ? 'student' : 'class',
-                    schoolConfig,
-                    showOnlyActive,
-                    term: reportTerm || null,
-                  })
-                }} className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium text-sm">Generate Report</button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"><div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10"><h3 className="text-lg font-bold text-gray-900">📊 Generate Fees Report</h3><button onClick={() => setShowReportModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button></div><div className="p-6 space-y-4"><div><label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label><select value={reportParams.academicYear} onChange={e => setReportParams({ ...reportParams, academicYear: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">{ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label><select value={reportTerm} onChange={e => setReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Terms</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label><select value={reportParams.periodType} onChange={e => setReportParams({ ...reportParams, periodType: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="1">Academic Year (1 Sep – 30 Jun)</option><option value="2">Month</option><option value="3">Custom</option></select></div>{reportParams.periodType === '2' && (<div><label className="block text-sm font-medium text-gray-700 mb-1">Month (MM/YYYY)</label><input type="text" placeholder="MM/YYYY" value={reportParams.monthInput} onChange={e => setReportParams({ ...reportParams, monthInput: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div>)}{reportParams.periodType === '3' && (<><div><label className="block text-sm font-medium text-gray-700 mb-1">Date from</label><input type="date" value={reportParams.customFrom} onChange={e => setReportParams({ ...reportParams, customFrom: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Date to</label><input type="date" value={reportParams.customTo} onChange={e => setReportParams({ ...reportParams, customTo: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div></>)}<div><label className="block text-sm font-medium text-gray-700 mb-1">Table Type</label><select value={reportParams.tableType} onChange={e => setReportParams({ ...reportParams, tableType: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="1">By class</option><option value="2">By student</option></select></div><div className="flex items-center gap-2 mt-2"><input type="checkbox" id="showOnlyActive" checked={showOnlyActive} onChange={e => setShowOnlyActive(e.target.checked)} className="h-4 w-4 text-blue-600 rounded" /><label htmlFor="showOnlyActive" className="text-sm text-gray-700">Show only students with payment in period</label></div><div className="flex gap-3 pt-2"><button type="button" onClick={() => setShowReportModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button><button type="button" onClick={async () => { let dateFrom, dateTo; const y = parseInt(reportParams.academicYear.split('/')[0]); if (reportParams.periodType === '1') { dateFrom = new Date(y, 8, 1); dateTo = new Date(y + 1, 5, 30); } else if (reportParams.periodType === '2') { const [m, yyyy] = reportParams.monthInput.split('/').map(Number); dateFrom = new Date(yyyy, m - 1, 1); dateTo = new Date(yyyy, m, 0, 23, 59, 59); } else { dateFrom = new Date(reportParams.customFrom); dateTo = new Date(reportParams.customTo); } setShowReportModal(false); await generateFeesReport({ academicYear: reportParams.academicYear, dateFrom, dateTo, tableType: reportParams.tableType === '2' ? 'student' : 'class', schoolConfig, showOnlyActive, term: reportTerm || null }); }} className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium text-sm">Generate Report</button></div></div></div></div>
       )}
 
       {showStatementModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10">
-              <h3 className="text-lg font-bold text-gray-900">📄 Student Statement</h3>
-              <button onClick={() => setShowStatementModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
-            </div>
-            <div className="p-6 space-y-4">
-              {!statementStudent ? (
-                <div className="relative">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Search Student</label>
-                  <input type="text" placeholder="Type student name..." value={statementSearch} onChange={e => setStatementSearch(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" autoComplete="off" />
-                  {statementSearch.length > 0 && (
-                    <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto bottom-full mb-1">
-                      {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(statementSearch.toLowerCase())).slice(0, 10).map(s => (
-                        <div key={s.id} onClick={() => { setStatementStudent({ id: s.id, first_name: s.first_name, last_name: s.last_name, class_id: s.class_id, classes: s.classes }); setStatementSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`) }} className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0">
-                          <span className="font-medium">{s.first_name} {s.last_name}</span><span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span>
-                        </div>
-                      ))}
-                      {students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(statementSearch.toLowerCase())).length === 0 && (<div className="px-3 py-2 text-sm text-gray-400">No student found</div>)}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <div className="bg-gray-50 rounded-lg p-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{statementStudent.first_name} {statementStudent.last_name}</p>
-                      <p className="text-xs text-gray-500">{statementStudent.classes?.name || 'No class'}</p>
-                    </div>
-                    <button onClick={() => { setStatementStudent(null); setStatementSearch('') }} className="text-xs text-blue-600 hover:underline">Change</button>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                    <select value={statementParams.academicYear} onChange={e => setStatementParams({ ...statementParams, academicYear: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                      <option value="2024/2025">2024/2025</option><option value="2025/2026">2025/2026</option><option value="2026/2027">2026/2027</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label>
-                    <select
-                      value={statementParams.periodType}
-                      onChange={e => setStatementParams({ ...statementParams, periodType: e.target.value, term: e.target.value === '2' ? 'Term 1' : '' })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                    >
-                      <option value="1">Full Academic Year</option>
-                      <option value="2">Term</option>
-                      <option value="3">Custom</option>
-                    </select>
-                  </div>
-                  {statementParams.periodType === '2' && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Select Term</label>
-                      <select
-                        value={statementParams.term || 'Term 1'}
-                        onChange={e => setStatementParams({ ...statementParams, term: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      >
-                        <option value="Term 1">Term 1</option>
-                        <option value="Term 2">Term 2</option>
-                        <option value="Term 3">Term 3</option>
-                      </select>
-                    </div>
-                  )}
-                  {statementParams.periodType === '3' && (
-                    <>
-                      <div><label className="block text-sm font-medium text-gray-700 mb-1">Date from</label><input type="date" value={statementParams.customFrom} onChange={e => setStatementParams({ ...statementParams, customFrom: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div>
-                      <div><label className="block text-sm font-medium text-gray-700 mb-1">Date to</label><input type="date" value={statementParams.customTo} onChange={e => setStatementParams({ ...statementParams, customTo: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div>
-                    </>
-                  )}
-                  <div className="flex gap-3 pt-2">
-                    <button type="button" onClick={() => setShowStatementModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
-                    <button type="button" onClick={async () => {
-                      let period = 'full', customFrom = null, customTo = null
-                      const selectedTerm = statementParams.term || null
-                      if (statementParams.periodType === '2') {
-                        period = selectedTerm || 'T1'
-                        let arrearsAmount = 0
-                        if (selectedTerm && statementStudent) {
-                          const allTerms = ['Term 1', 'Term 2', 'Term 3']
-                          const idx = allTerms.indexOf(selectedTerm)
-                          if (idx > 0) {
-                            for (let i = 0; i < idx; i++) {
-                              const remaining = await getRemainingFeesForStudent(statementStudent.id, statementParams.academicYear, allTerms[i])
-                              arrearsAmount += remaining.reduce((sum, r) => sum + r.remaining, 0)
-                            }
-                          }
-                        }
-                        setShowStatementModal(false)
-                        await generateStudentStatement({
-                          student: statementStudent,
-                          academicYear: statementParams.academicYear,
-                          period,
-                          customFrom: null,
-                          customTo: null,
-                          schoolConfig,
-                          term: selectedTerm,
-                          arrears: arrearsAmount,
-                        })
-                      } else if (statementParams.periodType === '3') {
-                        period = 'custom'
-                        customFrom = statementParams.customFrom
-                        customTo = statementParams.customTo
-                        setShowStatementModal(false)
-                        await generateStudentStatement({
-                          student: statementStudent,
-                          academicYear: statementParams.academicYear,
-                          period,
-                          customFrom,
-                          customTo,
-                          schoolConfig,
-                        })
-                      } else {
-                        setShowStatementModal(false)
-                        await generateStudentStatement({
-                          student: statementStudent,
-                          academicYear: statementParams.academicYear,
-                          period,
-                          schoolConfig,
-                        })
-                      }
-                    }} className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm">Generate Statement</button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"><div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10"><h3 className="text-lg font-bold text-gray-900">📄 Student Statement</h3><button onClick={() => setShowStatementModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button></div><div className="p-6 space-y-4">{!statementStudent ? (<div className="relative"><label className="block text-sm font-medium text-gray-700 mb-1">Search Student</label><input type="text" placeholder="Type student name..." value={statementSearch} onChange={e => setStatementSearch(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" autoComplete="off" />{statementSearch.length > 0 && (<div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto bottom-full mb-1">{students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(statementSearch.toLowerCase())).slice(0, 10).map(s => (<div key={s.id} onClick={() => { setStatementStudent({ id: s.id, first_name: s.first_name, last_name: s.last_name, class_id: s.class_id, classes: s.classes }); setStatementSearch(`${s.first_name} ${s.last_name} — ${s.classes?.name || ''}`) }} className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0"><span className="font-medium">{s.first_name} {s.last_name}</span><span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span></div>))}{students.filter(s => `${s.first_name} ${s.last_name}`.toLowerCase().includes(statementSearch.toLowerCase())).length === 0 && (<div className="px-3 py-2 text-sm text-gray-400">No student found</div>)}</div>)}</div>) : (<><div className="bg-gray-50 rounded-lg p-3 flex items-center justify-between"><div><p className="text-sm font-medium text-gray-900">{statementStudent.first_name} {statementStudent.last_name}</p><p className="text-xs text-gray-500">{statementStudent.classes?.name || 'No class'}</p></div><button onClick={() => { setStatementStudent(null); setStatementSearch('') }} className="text-xs text-blue-600 hover:underline">Change</button></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label><select value={statementParams.academicYear} onChange={e => setStatementParams({ ...statementParams, academicYear: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="2024/2025">2024/2025</option><option value="2025/2026">2025/2026</option><option value="2026/2027">2026/2027</option></select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Period Type</label><select value={statementParams.periodType} onChange={e => setStatementParams({ ...statementParams, periodType: e.target.value, term: e.target.value === '2' ? 'Term 1' : '' })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="1">Full Academic Year</option><option value="2">Term</option><option value="3">Custom</option></select></div>{statementParams.periodType === '2' && (<div><label className="block text-sm font-medium text-gray-700 mb-1">Select Term</label><select value={statementParams.term || 'Term 1'} onChange={e => setStatementParams({ ...statementParams, term: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></div>)}{statementParams.periodType === '3' && (<><div><label className="block text-sm font-medium text-gray-700 mb-1">Date from</label><input type="date" value={statementParams.customFrom} onChange={e => setStatementParams({ ...statementParams, customFrom: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Date to</label><input type="date" value={statementParams.customTo} onChange={e => setStatementParams({ ...statementParams, customTo: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" /></div></>)}<div className="flex gap-3 pt-2"><button type="button" onClick={() => setShowStatementModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button><button type="button" onClick={async () => { let period = 'full', customFrom = null, customTo = null; const selectedTerm = statementParams.term || null; if (statementParams.periodType === '2') { period = selectedTerm || 'T1'; let arrearsAmount = 0; if (selectedTerm && statementStudent) { const allTerms = ['Term 1', 'Term 2', 'Term 3']; const idx = allTerms.indexOf(selectedTerm); if (idx > 0) { for (let i = 0; i < idx; i++) { const remaining = await getRemainingFeesForStudent(statementStudent.id, statementParams.academicYear, allTerms[i]); arrearsAmount += remaining.reduce((sum, r) => sum + r.remaining, 0); } } } setShowStatementModal(false); await generateStudentStatement({ student: statementStudent, academicYear: statementParams.academicYear, period, customFrom: null, customTo: null, schoolConfig, term: selectedTerm, arrears: arrearsAmount }); } else if (statementParams.periodType === '3') { period = 'custom'; customFrom = statementParams.customFrom; customTo = statementParams.customTo; setShowStatementModal(false); await generateStudentStatement({ student: statementStudent, academicYear: statementParams.academicYear, period, customFrom, customTo, schoolConfig }); } else { setShowStatementModal(false); await generateStudentStatement({ student: statementStudent, academicYear: statementParams.academicYear, period, schoolConfig }); } }} className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm">Generate Statement</button></div></>)}</div></div></div>
       )}
 
       {showDiscountReportModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10">
-              <h3 className="text-lg font-bold text-gray-900">🏷️ Discount Report</h3>
-              <button onClick={() => setShowDiscountReportModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                <select
-                  value={discountReportYear}
-                  onChange={e => setDiscountReportYear(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                >
-                  <option value="2024/2025">2024/2025</option>
-                  <option value="2025/2026">2025/2026</option>
-                  <option value="2026/2027">2026/2027</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
-                <select
-                  value={discountReportTerm}
-                  onChange={e => setDiscountReportTerm(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                >
-                  <option value="">All Terms</option>
-                  <option value="Term 1">Term 1</option>
-                  <option value="Term 2">Term 2</option>
-                  <option value="Term 3">Term 3</option>
-                </select>
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowDiscountReportModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
-                <button type="button" onClick={async () => {
-                  setShowDiscountReportModal(false)
-                  await generateDiscountReport({
-                    academicYear: discountReportYear,
-                    schoolConfig,
-                    term: discountReportTerm || null,
-                  })
-                }} className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium text-sm">Generate</button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto"><div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10"><h3 className="text-lg font-bold text-gray-900">🏷️ Discount Report</h3><button onClick={() => setShowDiscountReportModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button></div><div className="p-6 space-y-4"><div><label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label><select value={discountReportYear} onChange={e => setDiscountReportYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="2024/2025">2024/2025</option><option value="2025/2026">2025/2026</option><option value="2026/2027">2026/2027</option></select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label><select value={discountReportTerm} onChange={e => setDiscountReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Terms</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></div><div className="flex gap-3 pt-2"><button type="button" onClick={() => setShowDiscountReportModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button><button type="button" onClick={async () => { setShowDiscountReportModal(false); await generateDiscountReport({ academicYear: discountReportYear, schoolConfig, term: discountReportTerm || null }); }} className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium text-sm">Generate</button></div></div></div></div>
       )}
 
       {showClassBalanceModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-            <div className="p-6 border-b flex items-center justify-between">
-              <h3 className="text-lg font-bold text-gray-900">📊 Class Balance Report</h3>
-              <button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
-            </div>
-            <div className="p-6 space-y-4">
-               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Class</label>
-                <select value={selectedBalanceClass} onChange={e => setSelectedBalanceClass(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  <option value="">-- Select Class --</option>
-                  {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                <select value={selectedBalanceYear} onChange={e => setSelectedBalanceYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
-                <select value={balanceReportTerm} onChange={e => setBalanceReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                  <option value="">All Terms</option>
-                  <option value="Term 1">Term 1</option>
-                  <option value="Term 2">Term 2</option>
-                  <option value="Term 3">Term 3</option>
-                </select>
-              </div>
-              <button
-                onClick={async () => {
-                  if (!selectedBalanceClass) return
-                  setShowClassBalanceModal(false)
-                  const className = classes.find(c => c.id === selectedBalanceClass)?.name || 'Class'
-                  await generateClassBalanceReport({
-                    className,
-                    classId: selectedBalanceClass,
-                    academicYear: selectedBalanceYear,
-                    schoolConfig,
-                    term: balanceReportTerm || null,
-                  })
-                }}
-                className="w-full bg-teal-600 text-white py-2 rounded-lg font-medium hover:bg-teal-700"
-              >
-                Generate Report
-              </button>
-            </div>
-          </div>
-        </div>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-md"><div className="p-6 border-b flex items-center justify-between"><h3 className="text-lg font-bold text-gray-900">📊 Class Balance Report</h3><button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button></div><div className="p-6 space-y-4"><div><label className="block text-sm font-medium text-gray-700 mb-1">Class</label><select value={selectedBalanceClass} onChange={e => setSelectedBalanceClass(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">-- Select Class --</option>{classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label><select value={selectedBalanceYear} onChange={e => setSelectedBalanceYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">{ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label><select value={balanceReportTerm} onChange={e => setBalanceReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Terms</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></div><button onClick={async () => { if (!selectedBalanceClass) return; setShowClassBalanceModal(false); const className = classes.find(c => c.id === selectedBalanceClass)?.name || 'Class'; await generateClassBalanceReport({ className, classId: selectedBalanceClass, academicYear: selectedBalanceYear, schoolConfig, term: balanceReportTerm || null }); }} className="w-full bg-teal-600 text-white py-2 rounded-lg font-medium hover:bg-teal-700">Generate Report</button></div></div></div>
       )}
     </div>
   )

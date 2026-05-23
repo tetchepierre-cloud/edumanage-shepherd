@@ -9,7 +9,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     currentAbortController.abort()
     console.warn('🛑 Requêtes Supabase annulées (onglet masqué)')
-    // Sauvegarde de la page en cours pour restaurer après rechargement
     sessionStorage.setItem('edumanage_last_page', window.location.pathname)
   } else {
     currentAbortController = new AbortController()

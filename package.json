@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 5173",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
-    "@supabase/supabase-js": "^2.39.0",
+    "@supabase/supabase-js": "^2.106.1",
     "date-fns": "^3.0.6",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.303.0",

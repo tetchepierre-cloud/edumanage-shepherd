@@ -4,18 +4,43 @@ import { serve } from "https://deno.land/std@0.170.0/http/server.ts";
 const CLIENT_ID = Deno.env.get("HUBTEL_CLIENT_ID")!;
 const CLIENT_SECRET = Deno.env.get("HUBTEL_CLIENT_SECRET")!;
 const SENDER_ID = Deno.env.get("HUBTEL_SENDER_ID") || "EduManage";
-
-// URL de l'API Quick Send de Hubtel
 const HUBTEL_API_URL = "https://smsc.hubtel.com/v1/messages/send";
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
 serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
+  }
+
   try {
-    const { phone, message } = await req.json();
+    // Lire le corps de la requête de manière robuste
+    const rawBody = await req.text();
+    console.log("Raw body:", rawBody);
+
+    let phone: string;
+    let message: string;
+
+    // Essayer de parser comme JSON
+    try {
+      const body = JSON.parse(rawBody);
+      phone = body.phone;
+      message = body.message;
+    } catch {
+      // Si ce n'est pas du JSON, essayer de parser comme URLSearchParams (form data)
+      const params = new URLSearchParams(rawBody);
+      phone = params.get('phone') || '';
+      message = params.get('message') || '';
+    }
 
     if (!phone || !message) {
       return new Response(
-        JSON.stringify({ error: "Missing phone or message" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Missing phone or message", received: rawBody }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -36,29 +61,26 @@ serve(async (req: Request) => {
       content: message,
     });
 
-    const response = await fetch(`${HUBTEL_API_URL}?${params.toString()}`, {
-      method: "GET",
-    });
-
+    const response = await fetch(`${HUBTEL_API_URL}?${params.toString()}`, { method: "GET" });
     const data = await response.json();
 
     if (!response.ok) {
       console.error("Hubtel error:", data);
       return new Response(
         JSON.stringify({ error: "Failed to send SMS via Hubtel", details: data }),
-        { status: response.status, headers: { "Content-Type": "application/json" } }
+        { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     return new Response(
       JSON.stringify({ success: true, data }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
     console.error("Unexpected error:", err);
     return new Response(
       JSON.stringify({ error: err.message }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });

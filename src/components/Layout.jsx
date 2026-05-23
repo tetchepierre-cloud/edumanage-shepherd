@@ -7,7 +7,10 @@ import { usePermissionsStore } from '../stores/permissionsStore'
 import {
   LayoutDashboard, Users, CreditCard, Receipt,
   Package, ClipboardList, Settings, LogOut,
-  Menu, X, GraduationCap, DollarSign, FileText, Calendar, ClipboardCheck, ThumbsUp, PenTool, Award, Baby, FlaskConical, BarChart3, School, FileSpreadsheet
+  Menu, X, GraduationCap, DollarSign, FileText,
+  Calendar, ClipboardCheck, ThumbsUp, PenTool,
+  Award, Baby, FlaskConical, BarChart3, School,
+  FileSpreadsheet
 } from 'lucide-react'
 
 const allNavItems = [
@@ -39,7 +42,7 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const { profile, logout } = useAuthStore()
   const navigate = useNavigate()
-  const [permissions, setPermissions] = useState({})          // module_access (true/false)
+  const [permissions, setPermissions] = useState({})
   const { permissions: granularPermissions, loadPermissions } = usePermissionsStore()
 
   // Charger les permissions du menu (module_access) – prioritaire
@@ -67,7 +70,6 @@ export default function Layout() {
     else loadPermissions(null)
   }, [profile?.role])
 
-  // Déterminer si un module a au moins une permission granulaire
   const hasAnyGranularPermission = (module) => {
     if (!module || !granularPermissions) return false
     return Object.keys(granularPermissions).some(key => key.startsWith(module + '.'))
@@ -80,7 +82,7 @@ export default function Layout() {
     navigate('/login')
   }
 
-  let lastGroup = null;
+  let lastGroup = null
 
   const navItems = allNavItems.filter(item => {
     if (item.module === 'dashboard') return true
@@ -109,8 +111,7 @@ export default function Layout() {
             const showGroupLabel = group && group !== lastGroup;
             lastGroup = group;
 
-            // Nouvelle logique de grisage
-            const moduleAccess = permissions[module];           // true | false | undefined
+            const moduleAccess = permissions[module];
             const blockedByModuleAccess = moduleAccess === false;
             const noGranularPermission = !isFullAccess && !hasAnyGranularPermission(module);
             const isDisabled = module && module !== 'dashboard' &&
@@ -180,7 +181,7 @@ export default function Layout() {
         <div className="p-4 border-t border-blue-800">
           {sidebarOpen && profile && (
             <div className="mb-3">
-              <p className="text-sm font-medium">{profile.full_name}</p>
+              <p className="text-sm font-medium">{profile.full_name || profile.first_name} {profile.last_name}</p>
               <p className="text-xs text-blue-300">{profile.role}</p>
             </div>
           )}
@@ -194,7 +195,7 @@ export default function Layout() {
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* Main content – la clé force le remontage après un refresh de session */}
       <main className="flex-1 overflow-auto">
         <Outlet />
       </main>

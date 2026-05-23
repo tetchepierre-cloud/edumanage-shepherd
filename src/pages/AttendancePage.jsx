@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 import { generateAttendanceRegisterPDF } from '../lib/attendanceReportGenerator';
 import { CanAct, CanSee } from '../components/PermissionGate';
+import { sendSMS, formatAbsenceSMS } from '../lib/sms';
 
 const STATUSES = [
   { code: 'P', label: 'Present',  color: 'bg-green-100 text-green-700 border-green-300' },
@@ -68,7 +69,7 @@ export default function AttendancePage() {
     setLoading(true);
     const { data: pupils } = await supabase
       .from('students')
-      .select('id, first_name, last_name')
+      .select('id, first_name, last_name, parent_phone')
       .eq('class_id', classId)
       .eq('active', true)
       .order('last_name');
@@ -139,48 +140,102 @@ export default function AttendancePage() {
   };
 
   const handleSave = async () => {
+    if (!selectedClass) return;
     setSaving(true);
     setMessage('');
 
-    const payload = students.map(s => ({
-      student_id: s.id,
-      class_id: selectedClass,
-      date: selectedDate,
-      status: attendance[s.id] || 'A',
-      period: 'AM',
-    }));
+    try {
+      const records = [];
+      const absentStudentsToNotify = [];
 
-    const { error } = await supabase.from('attendance').upsert(payload, {
-      onConflict: 'student_id, date, period',
-    });
+      for (const student of students) {
+        // CORRECTION CRITIQUE : 'P' par défaut pour la base de données
+        const status = attendance[student.id] || 'P'; 
+        
+        records.push({
+          student_id: student.id,
+          class_id: selectedClass,
+          date: selectedDate,
+          status,
+          period: 'AM',
+        });
 
-    if (error) {
-      setMessage(`Error: ${error.message}`);
-      setSaving(false);
-      return;
-    }
+        // Si on a cliqué sur 'A', on le met dans la liste des SMS
+        if (status === 'A') {
+          absentStudentsToNotify.push({
+            name: `${student.first_name} ${student.last_name}`,
+            phone: student.parent_phone,
+          });
+        }
+      }
 
-    const notifications = [];
-    students.forEach(s => {
-      const status = attendance[s.id] || 'A';
-      if (status === 'A' || status === 'L') {
-        notifications.push({
-          student_id: s.id,
-          notification_type: status === 'A' ? 'absence' : 'late',
-          message: `${s.first_name} ${s.last_name} was marked ${status === 'A' ? 'Absent' : 'Late'} on ${selectedDate}.`,
-          attendance_id: null,
+      // 1. Sauvegarde dans Supabase
+      const { error } = await supabase
+        .from('attendance')
+        .upsert(records, { onConflict: 'student_id, date, period' });
+
+      if (error) throw error;
+
+      // 2. Notifications internes pour l'école (Absences et Retards)
+      const notifications = [];
+      records.forEach(r => {
+        if (r.status === 'A' || r.status === 'L') {
+           const s = students.find(x => x.id === r.student_id);
+           if (s) {
+             notifications.push({
+                student_id: s.id,
+                notification_type: r.status === 'A' ? 'absence' : 'late',
+                message: `${s.first_name} ${s.last_name} was marked ${r.status === 'A' ? 'Absent' : 'Late'} on ${selectedDate}.`,
+                attendance_id: null,
+             });
+           }
+        }
+      });
+      
+      if (notifications.length > 0) {
+         await supabase.from('attendance_notifications').insert(notifications);
+      }
+
+      setMessage('Attendance saved successfully!');
+
+      // 3. Envoi des SMS aux parents concernés (En arrière-plan)
+      if (absentStudentsToNotify.length > 0) {
+        console.log(`[Système SMS] Traitement de ${absentStudentsToNotify.length} absence(s)...`);
+        
+        const formattedDate = new Date(selectedDate).toLocaleDateString('en-US', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+        });
+
+        absentStudentsToNotify.forEach(async (target) => {
+          // --- RADAR DE DIAGNOSTIC ---
+          if (!target.phone) {
+            console.warn(`[Système SMS] ❌ STOP : Aucun numéro pour ${target.name}. La variable contient :`, target.phone);
+            return;
+          }
+          
+          try {
+            console.log(`[Système SMS] 📡 Tentative d'envoi à ${target.phone} pour ${target.name}...`);
+            const smsMessage = formatAbsenceSMS(target.name, formattedDate);
+            const result = await sendSMS(target.phone, smsMessage);
+            
+            if (!result.success) {
+              console.error(`[Système SMS] ❌ Échec Hubtel pour ${target.name}:`, result.error);
+            } else {
+              console.log(`[Système SMS] ✅ Alerte SMS délivrée avec succès à ${target.phone}`);
+            }
+          } catch (smsErr) {
+            console.error(`[Système SMS] ❌ Erreur réseau pour ${target.name}:`, smsErr);
+          }
         });
       }
-    });
 
-    if (notifications.length > 0) {
-      const { error: notifError } = await supabase.from('attendance_notifications').insert(notifications);
-      if (notifError) console.error('Notification insert error:', notifError);
+      loadStats(selectedClass);
+    } catch (err) {
+      console.error('Error saving attendance:', err);
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSaving(false);
     }
-
-    loadStats(selectedClass);
-    setMessage('Attendance saved!');
-    setSaving(false);
   };
 
   const absenceRate = stats.total > 0 ? (((stats.absent + stats.late) / stats.total) * 100).toFixed(1) : 0;
