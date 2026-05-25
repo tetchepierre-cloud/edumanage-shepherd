@@ -249,19 +249,20 @@ export default function ParentPortalPage() {
   };
 
   // MODIF: Vue connectée avec vérification de chargement
+  // MODIF: Vue connectée avec vérification de chargement
   if (session) {
     if (isDataLoading) {
-        return <div className="min-h-screen flex items-center justify-center">Chargement de votre portail...</div>;
+        return <div className="min-h-screen flex items-center justify-center">Loading your portal...</div>;
     }
     
     // Si la session est active mais qu'aucun étudiant n'est lié
     if (!student || allStudents.length === 0) {
         return (
             <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
-                <h2 className="text-xl font-bold text-gray-800">Aucun profil associé</h2>
-                <p className="text-gray-600 mt-2">Nous ne trouvons pas d'élève lié à votre numéro de téléphone.</p>
-                <p className="text-sm text-gray-400 mt-4">Vérifiez que votre numéro a bien été enregistré dans la base de données de l'école.</p>
-                <button onClick={handleLogout} className="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg">Se déconnecter</button>
+                <h2 className="text-xl font-bold text-gray-800">No profile found</h2>
+                <p className="text-gray-600 mt-2">We couldn't find a student linked to this phone number.</p>
+                <p className="text-sm text-gray-400 mt-4">Please make sure your number is correctly registered in the school's database.</p>
+                <button onClick={handleLogout} className="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg">Sign Out</button>
             </div>
         );
     }

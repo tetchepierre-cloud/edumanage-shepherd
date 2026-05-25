@@ -46,13 +46,22 @@ serve(async (req: Request) => {
     // ── ACTION 1 : send-otp ──
     if (action === "send-otp") {
       // Vérifier que le numéro existe dans students
-      const { data: student } = await supabaseAdmin
+      // Vérifier que le numéro existe dans students (blindé pour les fratries)
+      const { data: students, error: studentError } = await supabaseAdmin
         .from("students")
         .select("id, first_name, last_name")
         .eq("parent_phone", cleaned)
-        .maybeSingle();
+        .limit(1);
+
+      if (studentError) {
+        // ÇA, C'EST POUR TOI : Le log interne dans Supabase reste en français
+        console.error("Erreur de base de données lors de la recherche de l'élève :", studentError);
+      }
+
+      const student = students && students.length > 0 ? students[0] : null;
 
       if (!student) {
+        // ÇA, C'EST POUR LE PARENT : Le message d'erreur qui part vers l'application est en anglais
         return new Response(JSON.stringify({ error: "Phone number not registered." }), {
           status: 404,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
