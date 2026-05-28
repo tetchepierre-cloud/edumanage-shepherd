@@ -319,9 +319,9 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   doc.text(textStr, leftMargin, A5_H / 2 + textWidth / 2, { angle: 90 })
   doc.restoreGraphicsState()
 
-  // 8. SAUVEGARDE
-  const fileOutputName = `Receipt_${receiptNo.replace(/[^a-zA-Z0-9-_]/g, '')}.pdf`
-  doc.save(fileOutputName)
+  // 8. SAUVEGARDE (Ouverture dans un nouvel onglet)
+  const pdfUrl = doc.output('bloburl')
+  window.open(pdfUrl, '_blank')
   
   return doc
 }
