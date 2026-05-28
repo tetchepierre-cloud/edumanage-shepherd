@@ -2,189 +2,335 @@
 import { jsPDF, GState } from 'jspdf'
 import { supabase } from './supabase'
 
-const A5_W = 148, A5_H = 210, M = 10, CW = A5_W - M * 2
+// Dimensions A5 Paysage (Landscape) en mm
+const A5_W = 210
+const A5_H = 148
+const M    = 12 // Marges optimales
+const CW   = A5_W - (M * 2) // Largeur de contenu utile (186mm)
 
-const BLUE   = [30, 77, 145], BLUE_L = [214, 228, 247], LGRAY  = [245, 247, 250]
-const MGRAY  = [226, 232, 240], DGRAY  = [107, 114, 128], BLACK  = [17, 24, 39]
-const GREEN  = [22, 101, 52],  GBG    = [220, 252, 231], AMBER  = [146, 64, 14]
-const WHITE  = [255, 255, 255], GOLD   = [255, 215, 0]
+// Palette de couleurs professionnelle (RGB)
+const BLUE   = [30, 77, 145]
+const BLUE_L = [214, 228, 247]
+const LGRAY  = [245, 247, 250]
+const MGRAY  = [226, 232, 240]
+const DGRAY  = [107, 114, 128]
+const BLACK  = [17, 24, 39]
+const GREEN  = [22, 101, 52]
+const GBG    = [220, 252, 231]
+const AMBER  = [146, 64, 14]
+const WHITE  = [255, 255, 255]
 
-function fillRect(doc, x, y, w, h, color) { doc.setFillColor(...color); doc.rect(x, y, w, h, 'F') }
-function strokeRect(doc, x, y, w, h, color, lw = 0.2) { doc.setDrawColor(...color); doc.setLineWidth(lw); doc.rect(x, y, w, h, 'S') }
-function text(doc, str, x, y, opts = {}) { doc.setTextColor(...(opts.color || BLACK)); doc.setFontSize(opts.size || 9); doc.setFont('helvetica', opts.style || 'normal'); doc.text(String(str ?? ''), x, y, { align: opts.align || 'left', maxWidth: opts.maxWidth }) }
-function hline(doc, y, color = MGRAY, lw = 0.2) { doc.setDrawColor(...color); doc.setLineWidth(lw); doc.line(M, y, A5_W - M, y) }
-function fmtGHS(n) { return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', { minimumFractionDigits: 2 }) }
-function fmtDate(d) { if (!d) return '—'; const dt = new Date(d); return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) }
+// Fonctions utilitaires de dessin géométrique et textuel
+function fillRect(doc, x, y, w, h, color) {
+  doc.setFillColor(...color)
+  doc.rect(x, y, w, h, 'F')
+}
 
+function strokeRect(doc, x, y, w, h, color, lw = 0.2) {
+  doc.setDrawColor(...color)
+  doc.setLineWidth(lw)
+  doc.rect(x, y, w, h, 'S')
+}
+
+function text(doc, str, x, y, opts = {}) {
+  const size = opts.size || 9.5
+  const style = opts.style || 'normal'
+  const color = opts.color || BLACK
+  const align = opts.align || 'left'
+  const maxWidth = opts.maxWidth || null
+
+  doc.setFont('helvetica', style)
+  doc.setFontSize(size)
+  doc.setTextColor(...color)
+
+  if (maxWidth) {
+    doc.text(String(str), x, y, { align: align, maxWidth: maxWidth })
+  } else {
+    doc.text(String(str), x, y, { align: align })
+  }
+}
+
+function hline(doc, y, color = MGRAY, lw = 0.2) {
+  doc.setDrawColor(...color)
+  doc.setLineWidth(lw)
+  doc.line(M, y, A5_W - M, y)
+}
+
+/**
+ * Génère et télécharge le reçu officiel au format A5 Paysage
+ */
+export async function printReceipt(payment, schoolConfig = {}, student = {}, currentClass = {}, feeDetails = []) {
+  // Initialisation du document en mode Paysage (landscape)
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: 'a5'
+  })
+
+  // Dimensions adaptées pour le logo agrandi (40.5mm * 1.5 = 60.75mm)
+  const hasLogo = !!schoolConfig?.logo
+  const logoSize = 36.45
+  const textStartX = hasLogo ? M + logoSize + 4 : M
+
+  // Grille verticale réajustée suite au déplacement du logo vers le haut (Y=4) et son agrandissement
+  const headerY = 15
+  const studentBlockY = hasLogo ? 48 : 35
+  const tableY = studentBlockY + 18
+
+  // 1. FILIGRANE (Watermark) Central multiplié par 3 (132mm x 132mm)
+  if (hasLogo) {
+    try {
+      doc.saveGraphicsState()
+      const gState = new GState({ opacity: 0.04 })
+      doc.setGState(gState)
+      doc.addImage(schoolConfig.logo, 'PNG', (A5_W / 2) - 52.8, (A5_H / 2) - 52.8, 105.6, 105.6)
+      doc.restoreGraphicsState()
+    } catch (e) {
+      console.warn("Watermark application failed:", e)
+    }
+  }
+
+  // 2. EN-TÊTE - LOGO DE L'ÉCOLE (Positionné plus haut à Y=4)
+  if (hasLogo) {
+    try {
+      doc.addImage(schoolConfig.logo, 'PNG', M, 4, logoSize, logoSize)
+    } catch (err) {
+      fillRect(doc, M, 4, logoSize, logoSize, BLUE_L)
+      text(doc, '🏫', M + (logoSize / 2), 4 + (logoSize / 2) + 2, { size: 18, align: 'center' })
+    }
+  }
+
+  // Coordonnées et alignement vertical de l'en-tête textuel à côté du logo
+  text(doc, schoolConfig.school_name || 'Accra Excellence International School', textStartX, headerY, { size: 13, style: 'bold', color: BLUE })
+  text(doc, schoolConfig.address || 'P.O. Box GA-432-1090, East Legon, Accra, Ghana', textStartX, headerY + 6, { size: 8.5, color: DGRAY })
+  text(doc, `Tel: ${schoolConfig.phone || '+233 (0) 302 555 123'}`, textStartX, headerY + 11, { size: 8.5, color: DGRAY })
+  text(doc, `Email: ${schoolConfig.email || 'info@school.edu.gh'}`, textStartX, headerY + 16, { size: 8.5, color: DGRAY })
+
+  // 3. EN-TÊTE - NUMÉRO ET DATE DE REÇU (Droite)
+  text(doc, 'OFFICIAL RECEIPT', A5_W - M, headerY, { size: 13, style: 'bold', color: BLUE, align: 'right' })
+  
+  // Petit bloc d'identification du reçu
+  fillRect(doc, A5_W - M - 58, headerY + 4, 58, 12, BLUE_L)
+  strokeRect(doc, A5_W - M - 58, headerY + 4, 58, 12, [185, 213, 242])
+  
+  const receiptNo = payment.receipt_no || payment.receipt_number || '#REC-0000'
+  
+  // Nettoyage et formatage strict de la date (Ex: 26 May 2026)
+  let rawDate = payment.date || payment.created_at || new Date().toISOString()
+  let receiptDate = String(rawDate).split('T')[0] 
+  if (receiptDate.includes('-')) {
+    const dateParts = receiptDate.split('-')
+    if (dateParts[0].length === 4) {
+      const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+      const day = parseInt(dateParts[2], 10)
+      const monthIndex = parseInt(dateParts[1], 10) - 1
+      const year = dateParts[0]
+      if (monthIndex >= 0 && monthIndex < 12) {
+        receiptDate = `${day} ${months[monthIndex]} ${year}`
+      }
+    }
+  }
+  
+  text(doc, 'Receipt No:', A5_W - M - 55, headerY + 8.5, { size: 8, style: 'bold', color: BLUE })
+  text(doc, receiptNo, A5_W - M - 3, headerY + 8.5, { size: 8, style: 'bold', color: BLACK, align: 'right' })
+  text(doc, 'Date:', A5_W - M - 55, headerY + 12.5, { size: 8, style: 'bold', color: BLUE })
+  text(doc, receiptDate, A5_W - M - 3, headerY + 12.5, { size: 8, color: BLACK, align: 'right' })
+
+  // Ligne de séparation d'en-tête adaptée à la nouvelle hauteur de fin du logo (64.75mm -> ligne à 67mm)
+  hline(doc, hasLogo ? 45 : 32, BLUE, 1.2)
+
+  // 4. BLOC DES INFORMATIONS ÉLÈVE
+  fillRect(doc, M, studentBlockY, CW, 15, LGRAY)
+  strokeRect(doc, M, studentBlockY, CW, 15, MGRAY)
+
+  // Extraction ciblée pour la structure relationnelle Supabase
+  let rawId = payment.student_id || student?.id || 'N/A';
+  const studentIdVal = rawId.length > 20 ? rawId.slice(0, 8).toUpperCase() : rawId;
+
+  let studentNameVal = 'N/A';
+  if (payment.students && payment.students.first_name) {
+    studentNameVal = `${payment.students.first_name} ${payment.students.last_name || ''}`.trim();
+  } else if (student?.first_name) {
+    studentNameVal = `${student.first_name} ${student.last_name || ''}`.trim();
+  }
+
+  let classNameVal = 'N/A';
+  if (payment.students?.classes?.name) {
+    classNameVal = payment.students.classes.name;
+  } else if (currentClass?.name) {
+    classNameVal = currentClass.name;
+  }
+
+  const periodStr = `${payment.academic_year || '2025/2026'} — ${payment.term || 'Term 2'}`
+
+  // Colonne 1 du bloc élève
+  text(doc, 'Student ID:', M + 4, studentBlockY + 4.5, { size: 8.5, color: DGRAY, style: 'bold' })
+  text(doc, studentIdVal, M + 28, studentBlockY + 4.5, { size: 8.5, color: BLACK, style: 'bold' })
+  text(doc, 'Student Name:', M + 4, studentBlockY + 10.5, { size: 8.5, color: DGRAY, style: 'bold' })
+  text(doc, studentNameVal, M + 28, studentBlockY + 10.5, { size: 8.5, color: BLACK, style: 'bold' })
+
+  // Colonne 2 du bloc élève
+  const col2X = M + (CW / 2) + 4
+  text(doc, 'Class:', col2X, studentBlockY + 4.5, { size: 8.5, color: DGRAY, style: 'bold' })
+  text(doc, classNameVal, col2X + 32, studentBlockY + 4.5, { size: 8.5, color: BLACK, style: 'bold' })
+  text(doc, 'Academic Period:', col2X, studentBlockY + 10.5, { size: 8.5, color: DGRAY, style: 'bold' })
+  text(doc, periodStr, col2X + 32, studentBlockY + 10.5, { size: 8.5, color: BLACK, style: 'bold' })
+
+  // 5. TABLEAU DES FRAIS 
+  fillRect(doc, M, tableY, CW, 7, BLUE)
+  text(doc, 'Fee Item Description', M + 3, tableY + 4.8, { size: 8.5, style: 'bold', color: WHITE })
+  text(doc, 'Amount Due (GHS)', A5_W - M - 42, tableY + 4.8, { size: 8.5, style: 'bold', color: WHITE, align: 'right' })
+  text(doc, 'Amount Paid (GHS)', A5_W - M - 3, tableY + 4.8, { size: 8.5, style: 'bold', color: WHITE, align: 'right' })
+
+  // --- RÉCUPÉRATION DYNAMIQUE DU VRAI SOLDE VIA SUPABASE (déplacée avant le tableau) ---
+  const year = payment.academic_year || '2025/2026';
+  const term = payment.term || 'Term 2';
+  const amountPaidToday = parseFloat(payment.amount || payment.total_paid || 0);
+  
+  let termExpected = 0;
+  let termPaidBefore = 0;
+
+  if (classNameVal && classNameVal !== 'N/A') {
+    const levelName = classNameVal.trim().replace(/\s*[A-Za-z]$/, '').trim();
+    const { data: level } = await supabase.from('levels').select('id').ilike('name', levelName).maybeSingle();
+    
+    if (level) {
+      const { data: fees } = await supabase.from('fee_structure')
+        .select('amount').eq('level_id', level.id).eq('academic_year', year)
+        .eq('term', term).eq('is_active', true);
+      
+      termExpected = (fees || []).reduce((s, f) => s + parseFloat(f.amount || 0), 0);
+
+      const { data: previousPayments } = await supabase
+        .from('fee_payments').select('amount').eq('student_id', payment.student_id)
+        .eq('academic_year', year).eq('term', term)
+        .in('status', ['paid', 'partial']).neq('id', payment.id);
+        
+      termPaidBefore = (previousPayments || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0);
+    }
+  }
+
+  const items = payment.items || feeDetails || []
+  const tableItems = items.length > 0 ? items : [
+    {
+      description: payment.description || payment.payment_type || 'School Fees Allocation',
+      amount_due: termExpected,  // ← Montant attendu pour le terme (corrigé)
+      amount_paid: payment.amount_paid || payment.amount || 0
+    }
+  ]
+
+  let currentY = tableY + 7
+  tableItems.forEach((item, index) => {
+    if (index % 2 === 1) {
+      fillRect(doc, M, currentY, CW, 7, [250, 250, 252])
+    }
+    strokeRect(doc, M, currentY, CW, 7, MGRAY, 0.15)
+
+    text(doc, item.description || 'Fee Item', M + 3, currentY + 4.8, { size: 8.5, color: BLACK, maxWidth: CW - 90 })
+
+    const dueStr = Number(item.amount_due || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const paidStr = Number(item.amount_paid || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+    text(doc, dueStr, A5_W - M - 42, currentY + 4.8, { size: 8.5, color: BLACK, align: 'right' })
+    text(doc, paidStr, A5_W - M - 3, currentY + 4.8, { size: 8.5, color: BLACK, align: 'right' })
+
+    currentY += 7
+  })
+
+  // 6. SYNTHÈSE FINANCIÈRE
+  const summaryY = currentY + 4
+  
+  text(doc, 'Notes / Remarks:', M, summaryY + 3, { size: 8, style: 'bold', color: BLACK })
+  const notesText = payment.notes || 'Payment successfully recorded in the academic portal. Thank you.'
+  text(doc, notesText, M, summaryY + 7, { size: 7.5, color: DGRAY, maxWidth: 105 })
+
+  if (payment.payment_method) {
+    text(doc, `Payment Method: ${payment.payment_method}`, M, summaryY + 18, { size: 8, style: 'bold', color: BLACK })
+  }
+
+  const summaryBoxW = 75   // largeur commune pour les deux blocs
+  const summaryBoxX = A5_W - M - summaryBoxW
+  const summaryBoxH = 10   // hauteur commune
+
+  // Bloc : TOTAL PAID TODAY
+  fillRect(doc, summaryBoxX, summaryY, summaryBoxW, summaryBoxH, GBG)
+  strokeRect(doc, summaryBoxX, summaryY, summaryBoxW, summaryBoxH, [187, 247, 208])
+  text(doc, 'TOTAL PAID TODAY :', summaryBoxX + 3, summaryY + 7, { size: 9, style: 'bold', color: GREEN })
+  
+  const totalPaidVal = payment.amount || payment.total_paid || 0
+  const totalPaidStr = 'GHS ' + Number(totalPaidVal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  text(doc, totalPaidStr, A5_W - M - 3, summaryY + 7, { size: 11, style: 'bold', color: GREEN, align: 'right' })
+
+  // Calcul du solde final réel pour ce trimestre
+  const totalBalance = Math.max(0, termExpected - (termPaidBefore + amountPaidToday));
+
+  if (totalBalance >= 0) {
+    const balanceBoxW = 75; // longueur augmentée
+    const balanceBoxX = A5_W - M - balanceBoxW;
+    const balanceBoxH = 10; // hauteur légèrement augmentée
+    const balanceY = summaryY + 10;
+
+    fillRect(doc, balanceBoxX, balanceY, balanceBoxW, balanceBoxH, [254, 243, 199]);
+    strokeRect(doc, balanceBoxX, balanceY, balanceBoxW, balanceBoxH, [253, 230, 138]);
+
+    // label avec police agrandie
+    text(doc, `Balance Remaining on ${term} :`, balanceBoxX + 3, balanceY + 7, {
+      size: 9,
+      style: 'bold',
+      color: AMBER
+    });
+
+    // montant avec police agrandie
+    const balanceStr = 'GHS ' + Number(totalBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    text(doc, balanceStr, A5_W - M - 3, balanceY + 7, {
+      size: 11,
+      style: 'bold',
+      color: AMBER,
+      align: 'right'
+    });
+  }
+
+  // 7. ZONE DE SIGNATURE (Retrait de la mention "(Cashier)")
+  const footerY = A5_H - 22
+  doc.setDrawColor(156, 163, 175)
+  doc.setLineWidth(0.25)
+  doc.setLineDashPattern([1.5, 1.5], 0)
+
+  doc.line(M, footerY, M + 55, footerY)
+  text(doc, 'Received By', M, footerY + 4, { size: 7.5, style: 'bold', color: DGRAY })
+  text(doc, payment.collected_by_name || 'Authorized Staff', M, footerY + 8, { size: 7, color: DGRAY })
+
+  doc.setLineDashPattern([], 0)
+
+  // Message de remerciement pour les parents : Agrandit, mis en gras (Bleu AEIS) pour attirer le regard
+  text(doc, 'Thank you for your partnership in investing in quality education.', A5_W / 2, A5_H - 6, { size: 9.5, style: 'bold', color: BLUE, align: 'center' })
+
+  // Filigrane vertical gauche (très discret)
+  doc.saveGraphicsState()
+  const gState = new GState({ opacity: 0.45 })
+  doc.setGState(gState)
+  doc.setFontSize(7)
+  doc.setTextColor(120, 120, 120)
+  doc.setFont('helvetica', 'normal')
+  const leftMargin = 3
+  const textStr = 'Powered by EduManage GH  •  +233 53 877 7840'
+  const textWidth = doc.getTextWidth(textStr)
+  // Rotation de -90° pour que le texte monte de bas en haut (ou 90° pour l'inverse)
+  doc.text(textStr, leftMargin, A5_H / 2 + textWidth / 2, { angle: 90 })
+  doc.restoreGraphicsState()
+
+  // 8. SAUVEGARDE
+  const fileOutputName = `Receipt_${receiptNo.replace(/[^a-zA-Z0-9-_]/g, '')}.pdf`
+  doc.save(fileOutputName)
+  
+  return doc
+}
+
+/**
+ * Génère un numéro de reçu unique depuis la base Supabase
+ */
 export async function generateReceiptNumber() {
   const { data, error } = await supabase.rpc('next_receipt_number')
   if (error) throw error
   return data
-}
-
-export async function printReceipt(payment, schoolConfig = {}) {
-  const doc = new jsPDF({ unit: 'mm', format: 'a5', orientation: 'portrait' })
-
-  const school = {
-    name:    (schoolConfig.school_name || 'BRIGHT FUTURE SCHOOL').toUpperCase(),
-    address: schoolConfig.address || 'Tamale, Northern Region',
-    phone:   schoolConfig.phone   || '+233 20 000 0000',
-    email:   schoolConfig.email   || '',
-    logo:    schoolConfig.logo    || null,
-  }
-
-  let logoData = null
-  if (school.logo) {
-    try {
-      const response = await fetch(school.logo)
-      const blob = await response.blob()
-      const reader = new FileReader()
-      logoData = await new Promise((resolve) => { reader.onloadend = () => resolve(reader.result); reader.readAsDataURL(blob) })
-    } catch (e) {}
-  }
-
-  if (logoData) {
-    doc.setGState(new GState({ opacity: 0.05 }))
-    doc.addImage(logoData, 'PNG', A5_W / 2 - 50, A5_H / 2 - 50, 100, 100)
-    doc.setGState(new GState({ opacity: 1 }))
-  }
-
-  const student         = payment.students || {}
-  const className       = student.classes?.name || '—'
-  const studentName     = `${student.first_name || ''} ${student.last_name || ''}`.trim() || '—'
-  const receiptNo       = payment.receipt_number
-  const payDate         = payment.payment_date ? fmtDate(payment.payment_date) : fmtDate(payment.created_at)
-  const year            = payment.academic_year  || '—'
-  const method          = payment.payment_method || 'Cash'
-  const notes           = payment.notes          || ''
-  const amountPaidToday = parseFloat(payment.amount || 0)
-
-  // ── Calcul du total attendu pour le terme ──
-  const term = payment.term || 'Term 1'
-  let termExpected = 0, termPaidBefore = 0
-
-  if (student?.classes?.name) {
-    const levelName = student.classes.name.trim().replace(/\s*[A-Za-z]$/, '').trim()
-    const { data: level } = await supabase.from('levels').select('id').ilike('name', levelName).maybeSingle()
-    if (level) {
-      const { data: fees } = await supabase.from('fee_structure').select('amount').eq('level_id', level.id).eq('academic_year', year).eq('term', term).eq('is_active', true)
-      termExpected = (fees || []).reduce((s, f) => s + parseFloat(f.amount), 0)
-
-      const { data: previousPayments } = await supabase
-        .from('fee_payments')
-        .select('amount')
-        .eq('student_id', payment.student_id)
-        .eq('academic_year', year)
-        .eq('term', term)
-        .in('status', ['paid', 'partial'])
-        .neq('id', payment.id)
-      termPaidBefore = (previousPayments || []).reduce((s, p) => s + parseFloat(p.amount), 0)
-    }
-  }
-
-  const totalBalance = Math.max(0, termExpected - (termPaidBefore + amountPaidToday))
-
-  // ── Construction d'une ligne unique avec l'attendu du terme ──
-  const feeItems = [{
-    description: (payment.payment_type || 'Tuition') + ' (' + year + ')',
-    expected: termExpected,
-    paid: amountPaidToday
-  }]
-
-  // ── DESSIN ──
-  let y = 0
-
-  // 1. HEADER
-  fillRect(doc, 0, 0, A5_W, 30, BLUE)
-  if (logoData) {
-    doc.addImage(logoData, 'JPEG', M + 2, 8, 18, 18)
-    const textX = M + 22
-    text(doc, school.name, textX, 10, { size: 10, style: 'bold', color: WHITE })
-    text(doc, school.address + (school.phone ? '  |  Tel: ' + school.phone : ''), textX, 16, { size: 7, color: [180, 210, 245] })
-    if (school.email) text(doc, school.email, textX, 22, { size: 6.5, color: [180, 210, 245] })
-  } else {
-    doc.setFillColor(...WHITE); doc.circle(M + 7, 15, 6, 'F')
-    text(doc, '🏫', M + 3.5, 17, { size: 9, color: BLUE })
-    text(doc, school.name, M + 18, 10, { size: 10, style: 'bold', color: WHITE })
-    text(doc, school.address + (school.phone ? '  |  Tel: ' + school.phone : ''), M + 18, 16, { size: 7, color: [180, 210, 245] })
-    if (school.email) text(doc, school.email, M + 18, 22, { size: 6.5, color: [180, 210, 245] })
-  }
-  text(doc, 'OFFICIAL PAYMENT RECEIPT', A5_W - M, 26, { size: 7.5, style: 'bold', color: GOLD, align: 'right' })
-  y = 34
-
-  // 2. BANDE N° REÇU
-  fillRect(doc, 0, y, A5_W, 8, BLUE_L)
-  text(doc, 'Receipt No.:', M, y + 5.5, { size: 7.5, style: 'bold', color: BLUE })
-  text(doc, receiptNo, M + 21, y + 5.5, { size: 8.5, style: 'bold', color: BLUE })
-  text(doc, 'Date: ' + payDate, A5_W - M, y + 5.5, { size: 7, color: BLACK, align: 'right' })
-  y += 11
-
-  // 3. INFOS ÉLÈVE
-  fillRect(doc, M, y, CW, 30, LGRAY)
-  strokeRect(doc, M, y, CW, 30, [200, 210, 225])
-  const col2 = M + CW / 2 + 2
-  const infoRows = [
-    ['Student', studentName, 'Academic Year', year],
-    ['Student ID', payment.student_id?.slice(0,8)?.toUpperCase() || '—', 'Method', method],
-    ['Class', className, 'Term', term],
-  ]
-  let iy = y + 6
-  infoRows.forEach(([l1, v1, l2, v2]) => {
-    text(doc, l1 + ':', M + 2, iy, { size: 7, style: 'bold', color: DGRAY })
-    text(doc, v1, M + 19, iy, { size: 7.5, color: BLACK })
-    if (l2) { text(doc, l2 + ':', col2, iy, { size: 7, style: 'bold', color: DGRAY }); text(doc, v2, col2 + 19, iy, { size: 7.5, color: BLACK }) }
-    iy += 7
-  })
-  y += 34
-
-  // 4. TABLEAU DU PAIEMENT DU JOUR
-  text(doc, 'THIS PAYMENT', M, y + 4, { size: 7.5, style: 'bold', color: BLUE })
-  y += 6
-  fillRect(doc, M, y, CW, 6.5, BLUE)
-  text(doc, 'Description', M + 2, y + 4.5, { size: 8, style: 'bold', color: WHITE })
-  text(doc, 'Expected', M + CW * 0.55, y + 4.5, { size: 8, style: 'bold', color: WHITE })
-  text(doc, 'Paid', A5_W - M - 2, y + 4.5, { size: 8, style: 'bold', color: WHITE, align: 'right' })
-  y += 6.5
-
-  let paidY = y
-  feeItems.forEach((item, idx) => {
-    const bg = idx % 2 === 0 ? WHITE : [250, 250, 252]
-    fillRect(doc, M, paidY, CW, 7, bg); strokeRect(doc, M, paidY, CW, 7, MGRAY)
-    text(doc, item.description, M + 2, paidY + 5, { size: 8, color: BLACK })
-    text(doc, fmtGHS(item.expected), M + CW * 0.55, paidY + 5, { size: 8, color: DGRAY })
-    text(doc, fmtGHS(item.paid), A5_W - M - 2, paidY + 5, { size: 8, style: 'bold', color: BLACK, align: 'right' })
-    paidY += 7
-  })
-
-  fillRect(doc, M, paidY, CW, 9, GBG); strokeRect(doc, M, paidY, CW, 9, GREEN, 0.4)
-  text(doc, 'TOTAL PAID TODAY', M + 2, paidY + 6, { size: 9, style: 'bold', color: GREEN })
-  text(doc, fmtGHS(amountPaidToday), A5_W - M - 2, paidY + 6, { size: 10, style: 'bold', color: GREEN, align: 'right' })
-  paidY += 11
-
-  if (totalBalance > 0) {
-    text(doc, `Balance Remaining on ${term}:`, M + 2, paidY + 5, { size: 8, style: 'bold', color: AMBER })
-    text(doc, fmtGHS(totalBalance), A5_W - M - 2, paidY + 5, { size: 8, style: 'bold', color: AMBER, align: 'right' })
-    paidY += 8
-  }
-
-  y = paidY + 4
-  if (notes) { text(doc, 'Note: ' + notes, M, y + 3, { size: 7, color: DGRAY, maxWidth: CW }); y += 8 }
-
-  // 6. SIGNATURE + Thank you
-  const signatureY = A5_H - 74
-  y = signatureY
-  hline(doc, y, [200, 210, 230], 0.3)
-  y += 4
-  text(doc, 'Received by:', M, y, { size: 7, style: 'bold', color: DGRAY })
-  text(doc, payment.collected_by_name || '________________', M, y + 6, { size: 7.5, color: BLACK })
-  text(doc, 'Signature:', M + 45, y, { size: 7, style: 'bold', color: DGRAY })
-  doc.setDrawColor(160,160,160); doc.setLineWidth(0.3); doc.line(M + 60, y + 18, A5_W - M, y + 18)
-  text(doc, 'Thank you for trusting us!', A5_W / 2, A5_H - 28, { size: 8, style: 'bold', color: GREEN, align: 'center' })
-
-  // 7. PIED DE PAGE
-  fillRect(doc, 0, A5_H - 4.5, A5_W, 4.5, BLUE)
-  text(doc, `Generated on ${new Date().toLocaleDateString('en-GB')} — ${school.name}`, M, A5_H - 2.25, { size: 6, color: [180,210,245], align: 'left' })
-  text(doc, 'Powered by EduManage GH  •  +233 53 877 7840', A5_W - M, A5_H - 2.25, { size: 6, color: [180,210,245], align: 'right' })
-
-  window.open(URL.createObjectURL(doc.output('blob')), '_blank')
 }

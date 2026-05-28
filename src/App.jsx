@@ -17,6 +17,7 @@ import SettingsPage from './pages/SettingsPage'
 import ClassListPage from './pages/ClassListPage'
 import TimetablePage from './pages/TimetablePage'
 import ParentPortalPage from './pages/ParentPortalPage'
+import TeacherSignUp from './pages/TeacherSignUp' // ← AJOUTÉ ICI
 import AttendancePage from './pages/AttendancePage'
 import BehaviorPage from './pages/BehaviorPage'
 import GradeEntryPage from './pages/GradeEntryPage'
@@ -47,6 +48,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/parent" element={<ParentPortalPage />} />
+        <Route path="/teacher-signup" element={<TeacherSignUp />} /> {/* ← AJOUTÉ ICI */}
         <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
           <Route index element={<DashboardPage />} />
           <Route path="students" element={<ProtectedRoute moduleName="students"><StudentsPage /></ProtectedRoute>} />

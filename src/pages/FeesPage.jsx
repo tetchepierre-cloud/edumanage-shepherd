@@ -443,6 +443,14 @@ export default function FeesPage() {
   
   const totalAmount = validLines.reduce((sum, l) => sum + parseFloat(l.amount), 0)
   const receiptNum = editPayment ? form.receipt_number.trim() : await generateReceiptNumber()
+
+  // ---> AJOUT 1 : Récupérer le vrai nom AVANT l'insertion
+  const { data: { user } } = await supabase.auth.getUser()
+  let collectorName = 'Accountant'
+  if (user) {
+    const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle()
+    collectorName = profile?.full_name || user.email || 'Accountant'
+  }
   
   const payload = {
     student_id: form.student_id, 
@@ -456,6 +464,7 @@ export default function FeesPage() {
     payment_date: form.payment_date,
     notes: form.notes.trim() || null, 
     fee_items: validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
+    collected_by_name: collectorName, // ---> AJOUT 2 : Injection du vrai nom dans la base de données
   }
   
   try {
@@ -517,14 +526,8 @@ export default function FeesPage() {
 
   // ── GÉNÉRATION ET IMPRESSION DU REÇU PAPIER ──
   const feeItems = validLines.map(l => ({ description: l.type, expected: parseFloat(l.amount), paid: parseFloat(l.amount) }))
-  const { data: { user } } = await supabase.auth.getUser()
-  
-  let collectorName = 'Accountant'
-  if (user) { 
-    const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).single()
-    collectorName = profile?.full_name || 'Accountant' 
-  }
-  
+        
+  // ---> AJOUT 3 : Utilisation de la variable déjà chargée plus haut
   await printReceipt({ ...fullPayment, feeItems, collected_by_name: collectorName }, schoolConfig)
 }
       

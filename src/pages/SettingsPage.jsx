@@ -6,7 +6,8 @@ import toast from 'react-hot-toast'
 import FeeManagementPage from './FeeManagementPage'
 import AcademicSettingsTab from '../components/AcademicSettingsTab';
 import PermissionsTab from '../components/PermissionsTab';
-import { CanSee } from '../components/PermissionGate';  // ← ajouté
+import { CanSee } from '../components/PermissionGate';
+import TeacherAssignmentsTab from '../components/TeacherAssignmentsTab';
 
 export default function SettingsPage() {
   const [profile, setProfile]     = useState(null)
@@ -250,6 +251,13 @@ export default function SettingsPage() {
           </button>
         </CanSee>
       </div>
+      <CanSee module="settings" section="tabs" element="Teacher Access tab">
+          <button onClick={() => setActiveTab('assignments')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
+              ${activeTab === 'assignments' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            🔑 Teacher Access
+          </button>
+        </CanSee>
 
       {/* ── Tab: School ── */}
       {activeTab === 'school' && (
@@ -453,6 +461,9 @@ export default function SettingsPage() {
 
       {activeTab === 'academic' && <AcademicSettingsTab />}
       {activeTab === 'permissions' && <PermissionsTab />}
+
+      {activeTab === 'assignments' && <TeacherAssignmentsTab />}
+
     </div>
   )
 }

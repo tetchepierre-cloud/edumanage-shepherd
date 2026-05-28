@@ -37,11 +37,32 @@ export default function StudentsPage() {
   }
 
   const fetchStudents = async () => {
-    setLoading(true)
-    const { data, error } = await supabase.from('students').select('*, classes(name)').order('first_name')
-    if (error) console.error(error)
-    setStudents(data || [])
-    setLoading(false)
+    setLoading(true);
+    
+    // 1. Récupérer l'utilisateur actuellement connecté
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // 2. Récupérer les ID des classes assignées à cet enseignant
+    const { data: assignments } = await supabase
+      .from('teacher_classes')
+      .select('class_id')
+      .eq('teacher_id', user.id);
+
+    // 3. Préparer la requête de base
+    let query = supabase.from('students').select('*, classes(name)');
+
+    // 4. Si l'enseignant a des classes, filtrer les résultats
+    if (assignments && assignments.length > 0) {
+      const classIds = assignments.map(a => a.class_id);
+      query = query.in('class_id', classIds);
+    }
+
+    // 5. Exécuter la requête finale (ajout du tri ici)
+    const { data, error } = await query.order('first_name');
+    
+    if (error) console.error("Error fetching students:", error);
+    setStudents(data || []);
+    setLoading(false);
   }
 
   const loadDiscounts = async (student) => {
