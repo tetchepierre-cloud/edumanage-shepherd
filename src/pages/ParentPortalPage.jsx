@@ -17,7 +17,7 @@ export default function ParentPortalPage() {
   const [studentName, setStudentName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [isDataLoading, setIsDataLoading] = useState(false); // MODIF: Gestion du chargement
+  const [isDataLoading, setIsDataLoading] = useState(false);
 
   // ── Session et données ──
   const [session, setSession] = useState(null);
@@ -37,7 +37,6 @@ export default function ParentPortalPage() {
   const [justifyMessage, setJustifyMessage] = useState('');
   const [schoolConfig, setSchoolConfig] = useState({ name: 'School Name', address: '', phone: '', email: '', logo: null });
 
-  // MODIF: useEffect robuste pour écouter la session
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) handleLoggedIn(session);
@@ -79,7 +78,7 @@ export default function ParentPortalPage() {
     finally { setLoading(false); }
   };
 
-    const handleLogin = async (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true); setError('');
     const cleaned = phone.replace(/[^0-9]/g, '');
@@ -100,7 +99,6 @@ export default function ParentPortalPage() {
         }
         return;
       }
-      // Connexion réussie – la session est maintenant active.
     } catch (err) {
       setError(err.message);
     } finally {
@@ -118,7 +116,6 @@ export default function ParentPortalPage() {
     finally { setLoading(false); }
   };
 
-  // MODIF: Utilisation de setSession natif
   const handleSetPassword = async (e) => {
     e.preventDefault();
     if (password.length < 8) { setError('Password must be at least 8 characters.'); return; }
@@ -130,7 +127,6 @@ export default function ParentPortalPage() {
         access_token: result.access_token,
         refresh_token: result.refresh_token
       });
-      // Le onAuthStateChange va déclencher handleLoggedIn automatiquement
     } catch (err) {
       setError(err.message);
     } finally {
@@ -138,7 +134,6 @@ export default function ParentPortalPage() {
     }
   };
 
-  // MODIF: handleLoggedIn gère maintenant le chargement
   const handleLoggedIn = async (currentSession) => {
     setIsDataLoading(true);
     setSession(currentSession);
@@ -152,7 +147,7 @@ export default function ParentPortalPage() {
     const { data: linkedStudents } = await supabase
       .from('students')
       .select('id, first_name, last_name, class_id, parent_name, classes(name)')
-      .eq('parent_phone', parentPhone); // <--- Le filtre .eq('active', true) a été supprimé
+      .eq('parent_phone', parentPhone);
 
     if (linkedStudents && linkedStudents.length > 0) {
       setAllStudents(linkedStudents);
@@ -186,36 +181,84 @@ export default function ParentPortalPage() {
   };
 
   const fetchBalance = async (id) => {
-    const { data: st } = await supabase.from('students').select('class_id').eq('id', id).single();
-    if (!st?.class_id) return;
-    const { data: cl } = await supabase.from('classes').select('level_id').eq('id', st.class_id).single();
-    if (!cl?.level_id) return;
-    const { data: fees } = await supabase.from('fee_structure').select('amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('is_active', true);
-    const total = (fees || []).reduce((s, f) => s + parseFloat(f.amount), 0);
-    const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).in('status', ['paid','partial']);
-    const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
-    setBalance({ expected: total, paid, remaining: Math.max(0, total - paid) });
-  };
+  const { data: st } = await supabase.from('students').select('class_id').eq('id', id).single();
+  if (!st?.class_id) return;
+  const { data: cl } = await supabase.from('classes').select('level_id').eq('id', st.class_id).single();
+  if (!cl?.level_id) return;
+  const { data: fees } = await supabase.from('fee_structure').select('id, amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('is_active', true);
+
+  // Récupération des réductions de l'élève
+  const { data: discounts } = await supabase
+    .from('student_fee_discounts')
+    .select('fee_structure_id, discount_type, discount_value')
+    .eq('student_id', id);
+
+  const discountMap = {};
+  (discounts || []).forEach(d => {
+    discountMap[d.fee_structure_id] = d;
+  });
+
+  let total = 0;
+  (fees || []).forEach(f => {
+    let amount = parseFloat(f.amount);
+    const disc = discountMap[f.id];
+    if (disc) {
+      if (disc.discount_type === 'fixed') {
+        amount = Math.max(0, amount - parseFloat(disc.discount_value));
+      } else {
+        amount = amount * (1 - parseFloat(disc.discount_value) / 100);
+      }
+    }
+    total += amount;
+  });
+
+  const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).in('status', ['paid','partial']);
+  const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
+  setBalance({ expected: total, paid, remaining: Math.max(0, total - paid) });
+};
 
   const fetchTermBalances = async (id) => {
-    const terms = ['Term 1','Term 2','Term 3'];
-    const res = [];
-    for (const term of terms) {
-      let exp = 0;
-      const { data: st } = await supabase.from('students').select('class_id').eq('id', id).single();
-      if (st?.class_id) {
-        const { data: cl } = await supabase.from('classes').select('level_id').eq('id', st.class_id).single();
-        if (cl?.level_id) {
-          const { data: fees } = await supabase.from('fee_structure').select('amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).eq('is_active', true);
-          exp = (fees || []).reduce((s, f) => s + parseFloat(f.amount), 0);
-        }
+  const terms = ['Term 1','Term 2','Term 3'];
+
+  // Récupération des réductions une seule fois pour l'élève
+  const { data: discounts } = await supabase
+    .from('student_fee_discounts')
+    .select('fee_structure_id, discount_type, discount_value')
+    .eq('student_id', id);
+
+  const discountMap = {};
+  (discounts || []).forEach(d => {
+    discountMap[d.fee_structure_id] = d;
+  });
+
+  const res = [];
+  for (const term of terms) {
+    let exp = 0;
+    const { data: st } = await supabase.from('students').select('class_id').eq('id', id).single();
+    if (st?.class_id) {
+      const { data: cl } = await supabase.from('classes').select('level_id').eq('id', st.class_id).single();
+      if (cl?.level_id) {
+        const { data: fees } = await supabase.from('fee_structure').select('id, amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).eq('is_active', true);
+        (fees || []).forEach(f => {
+          let amount = parseFloat(f.amount);
+          const disc = discountMap[f.id];
+          if (disc) {
+            if (disc.discount_type === 'fixed') {
+              amount = Math.max(0, amount - parseFloat(disc.discount_value));
+            } else {
+              amount = amount * (1 - parseFloat(disc.discount_value) / 100);
+            }
+          }
+          exp += amount;
+        });
       }
-      const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).in('status', ['paid','partial']);
-      const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
-      res.push({ term, expected: exp, paid, remaining: Math.max(0, exp - paid) });
     }
-    setTermBalances(res);
-  };
+    const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).in('status', ['paid','partial']);
+    const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
+    res.push({ term, expected: exp, paid, remaining: Math.max(0, exp - paid) });
+  }
+  setTermBalances(res);
+};
 
   const fetchAttendance = async (id) => {
     const { data } = await supabase.from('attendance').select('status').eq('student_id', id);
@@ -241,21 +284,39 @@ export default function ParentPortalPage() {
     }
   };
 
-  const handleUploadJustification = async () => { /* code existant inchangé */ };
+  const handleUploadJustification = async () => {
+    if (!justifyFile) return;
+    setJustifyMessage('Uploading...');
+    const fileName = `${student.id}/${Date.now()}_${justifyFile.name}`;
+    const { error: uploadError } = await supabase.storage.from('justificatifs').upload(fileName, justifyFile);
+    if (uploadError) { setJustifyMessage('Upload failed: ' + uploadError.message); return; }
+    const { data: publicUrlData } = supabase.storage.from('justificatifs').getPublicUrl(fileName);
+    const { data: parentAccount } = await supabase.from('parent_portal_accounts').select('id').eq('student_id', student.id).maybeSingle();
+    if (!parentAccount) { setJustifyMessage('Could not verify parent account.'); return; }
+    const { error: insertError } = await supabase.from('absence_justifications').insert({ student_id: student.id, parent_id: parentAccount.id, document_url: publicUrlData.publicUrl, reason: justifyReason });
+    if (insertError) setJustifyMessage('Insert failed: ' + insertError.message);
+    else {
+      setJustifyMessage('Justification submitted!');
+      setShowJustifyModal(false);
+      setJustifyFile(null);
+      setJustifyReason('');
+      const { data: justifs } = await supabase.from('absence_justifications').select('*').eq('student_id', student.id).order('created_at', { ascending: false });
+      setJustifications(justifs || []);
+    }
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setSession(null); setStudent(null); setAllStudents([]); setSelectedStudentId(null); setParentName('Parent');
     setNotifications([]); setJustifications([]); setBalance({expected:0,paid:0,remaining:0}); setAttendance({present:0,absent:0,late:0}); setTerms([]);
   };
 
-  // MODIF: Vue connectée avec vérification de chargement
-  // MODIF: Vue connectée avec vérification de chargement
+  // ── Vue connectée ──
   if (session) {
     if (isDataLoading) {
         return <div className="min-h-screen flex items-center justify-center">Loading your portal...</div>;
     }
     
-    // Si la session est active mais qu'aucun étudiant n'est lié
     if (!student || allStudents.length === 0) {
         return (
             <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
@@ -337,12 +398,61 @@ export default function ParentPortalPage() {
               <ul className="divide-y">{justifications.map(j => (<li key={j.id} className="py-3 flex justify-between items-center"><div><p className="text-sm font-medium">{j.reason || 'No reason provided'}</p><p className="text-xs text-gray-400">{new Date(j.created_at).toLocaleDateString('en-GB')}</p>{j.validated_at ? <span className="text-xs text-green-600 font-medium">Validated</span> : <span className="text-xs text-yellow-600 font-medium">Pending review</span>}</div>{j.document_url && <a href={j.document_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 text-xs underline">View document</a>}</li>))}</ul>
             )}
           </div>
+
+          {/* ═══════════ MODALE DE JUSTIFICATION (CORRIGÉE) ═══════════ */}
+          {showJustifyModal && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+                <h3 className="font-semibold text-lg mb-4">Submit Absence Justification</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Reason</label>
+                    <textarea
+                      value={justifyReason}
+                      onChange={(e) => setJustifyReason(e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
+                      rows={3}
+                      placeholder="e.g. Medical certificate, family event..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Attachment (optional)</label>
+                    <input
+                      type="file"
+                      onChange={(e) => setJustifyFile(e.target.files[0])}
+                      className="w-full text-sm"
+                    />
+                  </div>
+                  {justifyMessage && <p className="text-sm text-blue-600">{justifyMessage}</p>}
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      onClick={handleUploadJustification}
+                      className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm"
+                    >
+                      Submit
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowJustifyModal(false);
+                        setJustifyMessage('');
+                      }}
+                      className="border px-4 py-2 rounded-lg text-sm"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {/* ═══════════ FIN DE LA MODALE ═══════════ */}
+
         </div>
       </div>
     );
   }
 
-    // ── Vue non connectée ──
+  // ── Vue non connectée ──
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm">
@@ -354,7 +464,6 @@ export default function ParentPortalPage() {
 
         {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 mb-4 text-sm">{error}</div>}
 
-        {/* Étape 1 : connexion par mot de passe */}
         {step === 'phone' && (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -376,7 +485,6 @@ export default function ParentPortalPage() {
           </form>
         )}
 
-        {/* Étape 2 : envoi OTP (première connexion) */}
         {step === 'send-otp' && (
           <form onSubmit={handleSendOtp} className="space-y-4">
             <div>
@@ -392,7 +500,6 @@ export default function ParentPortalPage() {
           </form>
         )}
 
-        {/* Étape 3 : vérification OTP */}
         {step === 'otp' && (
           <form onSubmit={handleVerifyOtp} className="space-y-4">
             {studentName && <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">Welcome, parent of <strong>{studentName}</strong></div>}
@@ -406,7 +513,6 @@ export default function ParentPortalPage() {
           </form>
         )}
 
-        {/* Étape 4 : création du mot de passe */}
         {step === 'set-password' && (
           <form onSubmit={handleSetPassword} className="space-y-4">
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">Set your password to access the portal (min. 8 characters).</div>
