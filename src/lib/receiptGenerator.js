@@ -116,7 +116,7 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   const receiptNo = payment.receipt_no || payment.receipt_number || '#REC-0000'
   
   // Nettoyage et formatage strict de la date (Ex: 26 May 2026)
-  let rawDate = payment.date || payment.created_at || new Date().toISOString()
+  let rawDate = payment.payment_date || payment.created_at || new Date().toISOString()
   let receiptDate = String(rawDate).split('T')[0] 
   if (receiptDate.includes('-')) {
     const dateParts = receiptDate.split('-')
@@ -190,16 +190,39 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   let termExpected = 0;
   let termPaidBefore = 0;
 
-  if (classNameVal && classNameVal !== 'N/A') {
+    if (classNameVal && classNameVal !== 'N/A') {
     const levelName = classNameVal.trim().replace(/\s*[A-Za-z]$/, '').trim();
     const { data: level } = await supabase.from('levels').select('id').ilike('name', levelName).maybeSingle();
     
     if (level) {
       const { data: fees } = await supabase.from('fee_structure')
-        .select('amount').eq('level_id', level.id).eq('academic_year', year)
+        .select('id, amount').eq('level_id', level.id).eq('academic_year', year)
         .eq('term', term).eq('is_active', true);
+
+      // Récupération des réductions de l'élève
+      const { data: discounts } = await supabase
+        .from('student_fee_discounts')
+        .select('fee_structure_id, discount_type, discount_value')
+        .eq('student_id', payment.student_id);
       
-      termExpected = (fees || []).reduce((s, f) => s + parseFloat(f.amount || 0), 0);
+      const discountMap = {};
+      (discounts || []).forEach(d => {
+        discountMap[d.fee_structure_id] = d;
+      });
+
+      // Calcul du montant attendu après réductions
+      termExpected = (fees || []).reduce((s, f) => {
+        let amount = parseFloat(f.amount || 0);
+        const disc = discountMap[f.id];
+        if (disc) {
+          if (disc.discount_type === 'fixed') {
+            amount = Math.max(0, amount - parseFloat(disc.discount_value));
+          } else { // percentage
+            amount = amount * (1 - parseFloat(disc.discount_value) / 100);
+          }
+        }
+        return s + amount;
+      }, 0);
 
       const { data: previousPayments } = await supabase
         .from('fee_payments').select('amount').eq('student_id', payment.student_id)
