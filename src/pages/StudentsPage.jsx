@@ -142,7 +142,7 @@ export default function StudentsPage() {
       first_name:    student.first_name    || '',
       last_name:     student.last_name     || '',
       class_id:      student.class_id      || '',
-      date_of_birth: formatDateForInput(student.date_of_birth), // conversion DD/MM/YYYY
+      date_of_birth: student.date_of_birth || '', // conversion DD/MM/YYYY
       gender:        student.gender        || '',
       parent_name:   student.parent_name   || '',
       parent_phone:  student.parent_phone  || '',
@@ -343,10 +343,9 @@ export default function StudentsPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
                     <input
-                      type="text"
+                      type="date"
                       value={form.date_of_birth}
                       onChange={e => setForm({ ...form, date_of_birth: e.target.value })}
-                      placeholder="DD/MM/YYYY"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
                     />
                   </div>
@@ -355,8 +354,7 @@ export default function StudentsPage() {
                     <select value={form.gender} onChange={e => setForm({ ...form, gender: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
                       <option value="">Select gender</option>
                       <option value="Male">Male</option>
-                      <option value="Female">Female</option>
-                      <option value="Other">Other</option>
+                      <option value="Female">Female</option>                      
                     </select>
                   </div>
                   <div>

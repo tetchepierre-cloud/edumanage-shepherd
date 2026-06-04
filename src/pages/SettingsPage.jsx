@@ -321,7 +321,12 @@ export default function SettingsPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Capacity</label>
                 <input type="number" min="1" className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={newClass.capacity} onChange={e => setNewClass({...newClass, capacity: parseInt(e.target.value)})} />
+                  value={newClass.capacity} 
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setNewClass({...newClass, capacity: raw === '' ? 30 : parseInt(raw, 10)});
+                  }}
+                />
               </div>
               <button type="submit" className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
                 <Plus size={16} /> Add Class
