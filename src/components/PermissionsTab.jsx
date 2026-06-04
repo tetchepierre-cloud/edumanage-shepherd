@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/authStore';
 import toast from 'react-hot-toast';
 
-const ALL_ROLES = ['owner', 'director', 'manager', 'accountant', 'teacher', 'parent'];
+const ALL_ROLES = ['owner', 'director', 'manager', 'accountant', 'teacher', 'parent', 'secretary'];
 
 export default function PermissionsTab() {
   const { profile } = useAuthStore();

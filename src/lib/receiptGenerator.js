@@ -233,11 +233,20 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
     }
   }
 
-  const items = payment.items || feeDetails || []
+  // Lecture native du JSON Supabase si 'items' est omis
+  let items = payment.items || feeDetails || []
+  if (items.length === 0 && payment.fee_items && Array.isArray(payment.fee_items) && payment.fee_items.length > 0) {
+    items = payment.fee_items.map(fi => ({
+      description: fi.type,
+      amount_due: parseFloat(fi.amount),
+      amount_paid: parseFloat(fi.amount)
+    }))
+  }
+
   const tableItems = items.length > 0 ? items : [
     {
       description: payment.description || payment.payment_type || 'School Fees Allocation',
-      amount_due: termExpected,  // ← Montant attendu pour le terme (corrigé)
+      amount_due: termExpected,
       amount_paid: payment.amount_paid || payment.amount || 0
     }
   ]
@@ -288,7 +297,7 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   const totalBalance = Math.max(0, termExpected - (termPaidBefore + amountPaidToday));
 
   if (totalBalance >= 0) {
-    const balanceBoxW = 75; // longueur augmentée
+    const balanceBoxW = 90; // longueur augmentée
     const balanceBoxX = A5_W - M - balanceBoxW;
     const balanceBoxH = 10; // hauteur légèrement augmentée
     const balanceY = summaryY + 10;
@@ -297,7 +306,7 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
     strokeRect(doc, balanceBoxX, balanceY, balanceBoxW, balanceBoxH, [253, 230, 138]);
 
     // label avec police agrandie
-    text(doc, `Balance Remaining on ${term} :`, balanceBoxX + 3, balanceY + 7, {
+    text(doc, `OUTSTANDING BALANCE – ${term} :`, balanceBoxX + 3, balanceY + 7, {
       size: 9,
       style: 'bold',
       color: AMBER

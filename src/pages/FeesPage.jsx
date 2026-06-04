@@ -381,25 +381,34 @@ export default function FeesPage() {
   }
 
   const handlePrintReceipt = async (payment) => {
-    const expectedItems = await getExpectedFeeItems(payment.student_id, payment.academic_year || '2025/2026', payment.term || 'Term 1')
-    let feeItems = []
-    const amountPaid = parseFloat(payment.amount || 0)
-    if (payment.fee_items && Array.isArray(payment.fee_items) && payment.fee_items.length > 0) {
-      feeItems = payment.fee_items.map(fi => ({ description: fi.type, expected: parseFloat(fi.amount || 0), paid: parseFloat(fi.amount || 0) }))
-    } else if (expectedItems.length > 0) {
-      let remaining = amountPaid
-      feeItems = expectedItems.map((item, idx) => {
-        let paid = 0
-        if (idx === 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
-        else if (remaining > 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
-        return { description: item.description, expected: item.expected, paid }
-      })
-      if (remaining > 0) feeItems.push({ description: 'Overpayment', expected: 0, paid: remaining })
-    } else {
-      feeItems = [{ description: `${payment.payment_type} (${payment.academic_year})`, expected: amountPaid, paid: amountPaid }]
-    }
-    await printReceipt({ ...payment, feeItems, collected_by_name: payment.collected_by_name || 'Accountant' }, schoolConfig)
+  const expectedItems = await getExpectedFeeItems(payment.student_id, payment.academic_year || '2025/2026', payment.term || 'Term 1')
+  let itemsToPrint = []
+  const amountPaid = parseFloat(payment.amount || 0)
+  
+  if (payment.fee_items && Array.isArray(payment.fee_items) && payment.fee_items.length > 0) {
+    itemsToPrint = payment.fee_items.map(fi => {
+      const expected = expectedItems.find(e => e.type === fi.type)?.expected || parseFloat(fi.amount || 0);
+      return { 
+        description: fi.type, 
+        amount_due: expected, 
+        amount_paid: parseFloat(fi.amount || 0) 
+      }
+    })
+  } else if (expectedItems.length > 0) {
+    let remaining = amountPaid
+    itemsToPrint = expectedItems.map((item, idx) => {
+      let paid = 0
+      if (idx === 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
+      else if (remaining > 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
+      return { description: item.description, amount_due: item.expected, amount_paid: paid }
+    })
+    if (remaining > 0) itemsToPrint.push({ description: 'Overpayment', amount_due: 0, amount_paid: remaining })
+  } else {
+    itemsToPrint = [{ description: `${payment.payment_type} (${payment.academic_year})`, amount_due: amountPaid, amount_paid: amountPaid }]
   }
+  
+  await printReceipt({ ...payment, items: itemsToPrint, collected_by_name: payment.collected_by_name || 'Accountant' }, schoolConfig)
+ }
 
   const handleGenerateReport = () => setShowReportModal(true)
 
@@ -493,45 +502,37 @@ export default function FeesPage() {
       const { data: fullPayment } = await supabase.from('fee_payments').select('*, students(first_name, last_name, class_id, parent_phone, classes(name))').eq('id', data.id).single()
       
       if (fullPayment) {
-  // ── ENVOI DU SMS SÉCURISÉ AVEC LE VRAI SOLDE DU TRIMESTRE ──
-  const studentPhone = fullPayment.students?.parent_phone || student?.parent_phone;
-  
-  if (studentPhone) {
-    // 1. Calcul du solde total du trimestre AVANT le paiement actuel
-    const totalRemainingBefore = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0);
-    
-    // 2. Déduction du paiement actuel pour obtenir le VRAI solde restant après transaction
-    const actualBalanceAfter = Math.max(0, totalRemainingBefore - totalAmount);
+  // ── IMPRESSION DU REÇU (détail par prestation) ──
+  const feeItemsForReceipt = validLines.map(line => {
+    const feeInfo = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
+    return {
+      description: line.type,
+      amount_due: feeInfo ? feeInfo.annual : 0,
+      amount_paid: parseFloat(line.amount)
+    }
+  })
+  await printReceipt({ ...fullPayment, items: feeItemsForReceipt, collected_by_name: collectorName }, schoolConfig)
 
-    // 3. Formatage du message avec les valeurs nettoyées (2 décimales)
+  // ── ENVOI DU SMS (non‑bloquant, silencieux en cas d'échec) ──
+  const studentPhone = fullPayment.students?.parent_phone || student?.parent_phone;
+  if (studentPhone) {
+    const totalRemainingBefore = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0);
+    const actualBalanceAfter = Math.max(0, totalRemainingBefore - totalAmount);
     const smsMessage = formatPaymentSMS(
-      studentName, 
-      totalAmount.toFixed(2), 
-      receiptNum, 
+      studentName,
+      totalAmount.toFixed(2),
+      receiptNum,
       actualBalanceAfter.toFixed(2),
       form.term
     );
-    
-    console.log(`[Système SMS] Envoi du reçu marketing à ${studentPhone}...`);
-    
-    // Attente stricte de l'Edge function
-    const smsResult = await sendSMS(studentPhone, smsMessage);
-    
-    if (!smsResult.success) {
-      console.error("[Système SMS] Échec de transmission via Hubtel:", smsResult.error);
-    } else {
-      console.log("[Système SMS] Transmission confirmée avec succès.");
-    }
+    // Exécution en arrière-plan sans bloquer l'utilisateur
+    sendSMS(studentPhone, smsMessage).catch(err =>
+      console.error("[SMS] Non‑bloquant – envoi échoué :", err)
+    );
   }
-
-  // ── GÉNÉRATION ET IMPRESSION DU REÇU PAPIER ──
-  const feeItems = validLines.map(l => ({ description: l.type, expected: parseFloat(l.amount), paid: parseFloat(l.amount) }))
-        
-  // ---> AJOUT 3 : Utilisation de la variable déjà chargée plus haut
-  await printReceipt({ ...fullPayment, feeItems, collected_by_name: collectorName }, schoolConfig)
 }
       
-      setMessage('✅ Payment recorded, SMS sent & receipt printed!')
+      setMessage('✅ Payment recorded & receipt printed!')
       await fetchPayments()
       setTimeout(() => setShowForm(false), 1200)
     }
