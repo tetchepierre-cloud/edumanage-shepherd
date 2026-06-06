@@ -89,15 +89,12 @@ export default function AttendancePage() {
 
   const loadStats = async (classId) => {
     const dateObj = new Date(selectedDate);
-    const startOfMonth = new Date(dateObj.getFullYear(), dateObj.getMonth(), 1).toISOString().split('T')[0];
-    const endDate = selectedDate;
 
     const { data: attRecords } = await supabase
       .from('attendance')
       .select('status')
       .eq('class_id', classId)
-      .gte('date', startOfMonth)
-      .lte('date', endDate);
+      .eq('date', selectedDate);
 
     if (!attRecords) return;
 
@@ -111,7 +108,7 @@ export default function AttendancePage() {
     });
 
     setStats(counts);
-  };
+    };
 
   const fetchJustifications = async () => {
     if (!selectedClass) return;
