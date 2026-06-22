@@ -461,19 +461,24 @@ export default function FeesPage() {
     collectorName = profile?.full_name || user.email || 'Accountant'
   }
   
+  // Déterminer le statut en fonction du solde restant après ce paiement
+  const totalRemaining = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0);
+  const remainingAfterPayment = totalRemaining - totalAmount;
+  const paymentStatus = remainingAfterPayment <= 0.01 ? 'paid' : 'partial';
+
   const payload = {
-    student_id: form.student_id, 
-    amount: totalAmount,
-    payment_type: validLines.length > 1 ? 'Multiple' : validLines[0].type,
-    payment_method: form.payment_method, 
-    receipt_number: receiptNum, 
-    status: 'partial',
-    academic_year: form.academic_year, 
-    term: form.term, 
-    payment_date: form.payment_date,
-    notes: form.notes.trim() || null, 
-    fee_items: validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
-    collected_by_name: collectorName, // ---> AJOUT 2 : Injection du vrai nom dans la base de données
+      student_id: form.student_id, 
+      amount: totalAmount,
+      payment_type: validLines.length > 1 ? 'Multiple' : validLines[0].type,
+      payment_method: form.payment_method, 
+      receipt_number: receiptNum, 
+      status: paymentStatus,                                   // ← dynamique
+      academic_year: form.academic_year, 
+      term: form.term, 
+      payment_date: form.payment_date,
+      notes: form.notes.trim() || null, 
+      fee_items: validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
+      collected_by_name: collectorName,
   }
   
   try {

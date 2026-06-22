@@ -112,14 +112,15 @@ export default function GradeEntryPage() {
     if (!selectedSequence || !selectedSubject || students.length === 0) return;
     setSaving(true); setMessage('');
     const payload = students
-      .filter(s => grades[s.id]?.source !== 'ca')
+      .filter(s => grades[s.id]?.source !== 'ca' && grades[s.id]?.score != null)
       .map(s => ({
         student_id: s.id,
         class_subject_id: selectedSubject,
         sequence_id: selectedSequence,
-        score: grades[s.id]?.score ?? null,
+        score: grades[s.id].score,
         source: 'direct',
       }));
+
     if (payload.length === 0) {
       setMessage('No editable grades (all are CA‑locked).');
       setSaving(false);
@@ -139,6 +140,7 @@ export default function GradeEntryPage() {
       class_subject_id: selectedSubject,
       name: 'New Component',
       weight: 10,
+      max_score: 100,
     }).select().single();
     if (!error && data) setCaComponents(prev => [...prev, data]);
   };
@@ -185,18 +187,31 @@ export default function GradeEntryPage() {
       caComponents.forEach(c => {
         const w = parseFloat(c.weight) || 0;
         const sc = caScores[s.id]?.[c.id];
-        if (sc !== undefined && w > 0) { weightedSum += sc * w; totalWeight += w; }
+        if (sc !== undefined && w > 0) {
+          const max = parseInt(c.max_score) || 100;
+          const normalized = (sc / max) * 100;  // ramène la note sur 100
+          weightedSum += normalized * w;
+          totalWeight += w;
+        }
       });
       if (totalWeight > 0) calculatedGrades[s.id] = parseFloat((weightedSum / totalWeight).toFixed(2));
     });
 
-    const gradePayload = students.map(s => ({
-      student_id: s.id,
-      class_subject_id: selectedSubject,
-      sequence_id: selectedSequence,
-      score: calculatedGrades[s.id] || null,
-      source: 'ca',
-    }));
+    const gradePayload = students
+      .filter(s => calculatedGrades[s.id] != null)
+      .map(s => ({
+        student_id: s.id,
+        class_subject_id: selectedSubject,
+        sequence_id: selectedSequence,
+        score: calculatedGrades[s.id],
+        source: 'ca',
+      }));
+
+    if (gradePayload.length === 0) {
+      setCaMessage('No grades to save. Ensure all students have at least one CA score.');
+      return;
+    }
+
     const { error: gradeError } = await supabase.from('grades').upsert(gradePayload, {
       onConflict: 'student_id, class_subject_id, sequence_id',
     });
@@ -357,10 +372,14 @@ export default function GradeEntryPage() {
                     <input type="text" value={comp.name}
                       onChange={e => updateComponent(comp.id, 'name', e.target.value)}
                       className="flex-1 border rounded px-2 py-1 text-sm" />
-                    <input type="number" min="0" max="100" value={comp.weight}
+                     <input type="number" min="0" max="100" value={comp.weight}
                       onChange={e => updateComponent(comp.id, 'weight', parseFloat(e.target.value) || 0)}
                       className="w-16 border rounded px-2 py-1 text-sm text-center" />
                     <span className="text-xs text-gray-500">%</span>
+                    <input type="number" min="1" value={comp.max_score || 100}
+                      onChange={e => updateComponent(comp.id, 'max_score', parseInt(e.target.value) || 1)}
+                      className="w-16 border rounded px-2 py-1 text-sm text-center" />
+                    <span className="text-xs text-gray-500">pts</span>
                     <button onClick={() => deleteComponent(comp.id)} className="text-red-500 hover:text-red-700"><Trash2 size={14} /></button>
                   </div>
                 ))}
@@ -389,7 +408,10 @@ export default function GradeEntryPage() {
                     <tr>
                       <th className="text-left px-3 py-2">Student</th>
                       {caComponents.map(c => (
-                        <th key={c.id} className="text-center px-2 py-2 text-xs">{c.name}<br/>({c.weight}%)</th>
+                        <th key={c.id} className="text-center px-2 py-2 text-xs">
+                          {c.name}<br/>({c.weight}%)<br/>
+                          <span className="text-gray-400">out of {c.max_score || 100}</span>
+                        </th>
                       ))}
                     </tr>
                   </thead>

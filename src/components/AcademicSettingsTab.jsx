@@ -97,8 +97,8 @@ export default function AcademicSettingsTab() {
 
   const addSequence = async (termId) => {
     // Valeurs par défaut
-    const defaultMid = { term_id: termId, name: 'Mid-Term', sequence_type: 'midterm', weight_percent: 30 };
-    const defaultEnd = { term_id: termId, name: 'End-of-Term', sequence_type: 'endterm', weight_percent: 70 };
+    const defaultMid = { term_id: termId, name: 'School-Based Assessment (SBA)', sequence_type: 'midterm', weight_percent: 50 };
+    const defaultEnd = { term_id: termId, name: 'End-Term Exam', sequence_type: 'endterm', weight_percent: 50 };
     const { error } = await supabase.from('assessment_sequences').insert([defaultMid, defaultEnd]);
     if (error) {
       toast.error('Error: ' + error.message);
