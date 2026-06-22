@@ -198,9 +198,20 @@ export default function ParentPortalPage() {
     discountMap[d.fee_structure_id] = d;
   });
 
+  // 🔁 Récupérer les overrides pour cet élève
+  const { data: overrides } = await supabase
+    .from('student_fee_overrides')
+    .select('fee_structure_id, override_amount')
+    .eq('student_id', id);
+  const overrideMap = {};
+  (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
+
   let total = 0;
   (fees || []).forEach(f => {
-    let amount = parseFloat(f.amount);
+    // Utiliser l'override si présent, sinon le montant standard
+    let amount = overrideMap[f.id] !== undefined
+      ? parseFloat(overrideMap[f.id])
+      : parseFloat(f.amount);
     const disc = discountMap[f.id];
     if (disc) {
       if (disc.discount_type === 'fixed') {
@@ -231,6 +242,14 @@ export default function ParentPortalPage() {
     discountMap[d.fee_structure_id] = d;
   });
 
+  // 🔁 Récupérer les overrides pour cet élève
+  const { data: overrides } = await supabase
+    .from('student_fee_overrides')
+    .select('fee_structure_id, override_amount')
+    .eq('student_id', id);
+  const overrideMap = {};
+  (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
+
   const res = [];
   for (const term of terms) {
     let exp = 0;
@@ -240,7 +259,10 @@ export default function ParentPortalPage() {
       if (cl?.level_id) {
         const { data: fees } = await supabase.from('fee_structure').select('id, amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).eq('is_active', true);
         (fees || []).forEach(f => {
-          let amount = parseFloat(f.amount);
+          // Utiliser l'override si présent, sinon le montant standard
+          let amount = overrideMap[f.id] !== undefined
+            ? parseFloat(overrideMap[f.id])
+            : parseFloat(f.amount);
           const disc = discountMap[f.id];
           if (disc) {
             if (disc.discount_type === 'fixed') {

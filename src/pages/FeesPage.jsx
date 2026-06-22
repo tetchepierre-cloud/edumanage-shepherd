@@ -171,7 +171,7 @@ export default function FeesPage() {
       .single()
     if (studentErr || !student?.classes) return []
     const className = student.classes.name.trim()
-    const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
+    const levelName = className.replace(/\s+[A-Za-z]$/, '').trim()
     const { data: levelData, error: levelErr } = await supabase
       .from('levels')
       .select('id')
@@ -188,14 +188,26 @@ export default function FeesPage() {
     if (term) query = query.eq('term', term)
     const { data: fees, error: feesErr } = await query.order('is_mandatory', { ascending: false })
     if (feesErr || !fees || fees.length === 0) return []
+    
     const { data: discounts } = await supabase
       .from('student_fee_discounts')
       .select('fee_structure_id, discount_type, discount_value')
       .eq('student_id', studentId)
     const discountMap = {}
     ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
+
+    // 🔁 Récupérer les overrides pour cet élève
+    const { data: overrides } = await supabase
+      .from('student_fee_overrides')
+      .select('fee_structure_id, override_amount')
+      .eq('student_id', studentId)
+    const overrideMap = {}
+    ;(overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount })
+
     return fees.map(f => {
-      let originalAmount = parseFloat(f.amount)
+      let originalAmount = overrideMap[f.id] !== undefined
+        ? parseFloat(overrideMap[f.id])
+        : parseFloat(f.amount)
       let finalAmount = originalAmount
       const discount = discountMap[f.id]
       if (discount) {
@@ -245,7 +257,7 @@ export default function FeesPage() {
         alreadyPaid,
         remaining,
         feeStructureId: f.feeStructureId,
-        requiredForAdmission: f.requiredForAdmission,
+        requiredForAdmission: f.required_forAdmission,
       }
     })
   }
@@ -270,7 +282,7 @@ export default function FeesPage() {
       .single()
     if (!student?.classes?.name) return
     const className = student.classes.name.trim()
-    const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
+    const levelName = className.replace(/\s+[A-Za-z]$/, '').trim()
     const { data: level } = await supabase
       .from('levels')
       .select('id, min_payment')
@@ -381,34 +393,34 @@ export default function FeesPage() {
   }
 
   const handlePrintReceipt = async (payment) => {
-  const expectedItems = await getExpectedFeeItems(payment.student_id, payment.academic_year || '2025/2026', payment.term || 'Term 1')
-  let itemsToPrint = []
-  const amountPaid = parseFloat(payment.amount || 0)
-  
-  if (payment.fee_items && Array.isArray(payment.fee_items) && payment.fee_items.length > 0) {
-    itemsToPrint = payment.fee_items.map(fi => {
-      const expected = expectedItems.find(e => e.type === fi.type)?.expected || parseFloat(fi.amount || 0);
-      return { 
-        description: fi.type, 
-        amount_due: expected, 
-        amount_paid: parseFloat(fi.amount || 0) 
-      }
-    })
-  } else if (expectedItems.length > 0) {
-    let remaining = amountPaid
-    itemsToPrint = expectedItems.map((item, idx) => {
-      let paid = 0
-      if (idx === 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
-      else if (remaining > 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
-      return { description: item.description, amount_due: item.expected, amount_paid: paid }
-    })
-    if (remaining > 0) itemsToPrint.push({ description: 'Overpayment', amount_due: 0, amount_paid: remaining })
-  } else {
-    itemsToPrint = [{ description: `${payment.payment_type} (${payment.academic_year})`, amount_due: amountPaid, amount_paid: amountPaid }]
+    const expectedItems = await getExpectedFeeItems(payment.student_id, payment.academic_year || '2025/2026', payment.term || 'Term 1')
+    let itemsToPrint = []
+    const amountPaid = parseFloat(payment.amount || 0)
+
+    if (payment.fee_items && Array.isArray(payment.fee_items) && payment.fee_items.length > 0) {
+      itemsToPrint = payment.fee_items.map(fi => {
+        const expected = expectedItems.find(e => e.type === fi.type)?.expected || parseFloat(fi.amount || 0)
+        return { 
+          description: fi.type, 
+          amount_due: expected, 
+          amount_paid: parseFloat(fi.amount || 0) 
+        }
+      })
+    } else if (expectedItems.length > 0) {
+      let remaining = amountPaid
+      itemsToPrint = expectedItems.map((item, idx) => {
+        let paid = 0
+        if (idx === 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
+        else if (remaining > 0) { paid = Math.min(remaining, item.expected); remaining -= paid }
+        return { description: item.description, amount_due: item.expected, amount_paid: paid }
+      })
+      if (remaining > 0) itemsToPrint.push({ description: 'Overpayment', amount_due: 0, amount_paid: remaining })
+    } else {
+      itemsToPrint = [{ description: `${payment.payment_type} (${payment.academic_year})`, amount_due: amountPaid, amount_paid: amountPaid }]
+    }
+
+    await printReceipt({ ...payment, items: itemsToPrint, collected_by_name: payment.collected_by_name || 'Accountant' }, schoolConfig)
   }
-  
-  await printReceipt({ ...payment, items: itemsToPrint, collected_by_name: payment.collected_by_name || 'Accountant' }, schoolConfig)
- }
 
   const handleGenerateReport = () => setShowReportModal(true)
 
@@ -422,131 +434,128 @@ export default function FeesPage() {
   const handleOpenDiscountReport = () => setShowDiscountReportModal(true)
 
   const handleSave = async (e) => {
-  e.preventDefault()
-  setSaving(true)
-  setMessage('')
-  
-  if (!form.student_id) { 
-    setMessage('❌ Please select a student.')
-    setSaving(false)
-    return 
-  }
-  
-  const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
-  const validLines = feeLines.filter(l => parseFloat(l.amount) > 0)
-  
-  if (validLines.length === 0) { 
-    setMessage('❌ Add at least one fee item with amount > 0.')
-    setSaving(false)
-    return 
-  }
-  
-  for (const line of validLines) {
-    const remaining = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
-    if (remaining && parseFloat(line.amount) > remaining.remaining) {
-      setMessage(`❌ Amount for ${line.type} exceeds remaining balance (${formatAmount(remaining.remaining)}).`)
+    e.preventDefault()
+    setSaving(true)
+    setMessage('')
+
+    if (!form.student_id) { 
+      setMessage('❌ Please select a student.')
       setSaving(false)
-      return
+      return 
     }
-  }
-  
-  const totalAmount = validLines.reduce((sum, l) => sum + parseFloat(l.amount), 0)
-  const receiptNum = editPayment ? form.receipt_number.trim() : await generateReceiptNumber()
 
-  // ---> AJOUT 1 : Récupérer le vrai nom AVANT l'insertion
-  const { data: { user } } = await supabase.auth.getUser()
-  let collectorName = 'Accountant'
-  if (user) {
-    const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle()
-    collectorName = profile?.full_name || user.email || 'Accountant'
-  }
-  
-  // Déterminer le statut en fonction du solde restant après ce paiement
-  const totalRemaining = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0);
-  const remainingAfterPayment = totalRemaining - totalAmount;
-  const paymentStatus = remainingAfterPayment <= 0.01 ? 'paid' : 'partial';
+    const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
+    const validLines = feeLines.filter(l => parseFloat(l.amount) > 0)
 
-  const payload = {
+    if (validLines.length === 0) { 
+      setMessage('❌ Add at least one fee item with amount > 0.')
+      setSaving(false)
+      return 
+    }
+
+    for (const line of validLines) {
+      const remaining = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
+      if (remaining && parseFloat(line.amount) > remaining.remaining) {
+        setMessage(`❌ Amount for ${line.type} exceeds remaining balance (${formatAmount(remaining.remaining)}).`)
+        setSaving(false)
+        return
+      }
+    }
+
+    const totalAmount = validLines.reduce((sum, l) => sum + parseFloat(l.amount), 0)
+    const receiptNum = editPayment ? form.receipt_number.trim() : await generateReceiptNumber()
+
+    const { data: { user } } = await supabase.auth.getUser()
+    let collectorName = 'Accountant'
+    if (user) {
+      const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle()
+      collectorName = profile?.full_name || user.email || 'Accountant'
+    }
+
+    // Déterminer le statut en fonction du solde restant après ce paiement
+    const totalRemaining = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0)
+    const remainingAfterPayment = totalRemaining - totalAmount
+    const paymentStatus = remainingAfterPayment <= 0.01 ? 'paid' : 'partial'
+
+    const payload = {
       student_id: form.student_id, 
       amount: totalAmount,
       payment_type: validLines.length > 1 ? 'Multiple' : validLines[0].type,
       payment_method: form.payment_method, 
       receipt_number: receiptNum, 
-      status: paymentStatus,                                   // ← dynamique
+      status: paymentStatus,
       academic_year: form.academic_year, 
       term: form.term, 
       payment_date: form.payment_date,
       notes: form.notes.trim() || null, 
       fee_items: validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
       collected_by_name: collectorName,
-  }
-  
-  try {
-    if (editPayment) {
-      const oldPayment = payments.find(p => p.id === editPayment.id)
-      const { data, error } = await supabase.from('fee_payments').update(payload).eq('id', editPayment.id).select().single()
-      if (error) throw error
-      
-      await logAction({ action: 'UPDATE', tableName: 'fee_payments', recordId: data.id, oldData: oldPayment, newData: data, description: `Updated fee payment — ${data.payment_type} GHS ${data.amount} (${data.academic_year}, ${data.term}) · Receipt: ${data.receipt_number}` })
-      await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
-      
-      setMessage('✅ Payment updated successfully!')
-      await fetchPayments()
-      setTimeout(() => setShowForm(false), 1200)
-      
-    } else {
-      const { data, error } = await supabase.from('fee_payments').insert([payload]).select().single()
-      if (error) throw error
-      
-      const student = students.find(s => s.id === data.student_id)
-      const studentName = student ? `${student.first_name} ${student.last_name}` : 'Unknown student'
-      
-      await logAction({ action: 'CREATE', tableName: 'fee_payments', recordId: data.id, oldData: null, newData: data, description: `Fee payment recorded — ${studentName} · ${data.payment_type} GHS ${data.amount} · ${data.status} · ${data.academic_year} · ${data.term} · Receipt: ${data.receipt_number}` })
-      await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
-      
-      const { data: fullPayment } = await supabase.from('fee_payments').select('*, students(first_name, last_name, class_id, parent_phone, classes(name))').eq('id', data.id).single()
-      
-      if (fullPayment) {
-  // ── IMPRESSION DU REÇU (détail par prestation) ──
-  const feeItemsForReceipt = validLines.map(line => {
-    const feeInfo = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
-    return {
-      description: line.type,
-      amount_due: feeInfo ? feeInfo.annual : 0,
-      amount_paid: parseFloat(line.amount)
     }
-  })
-  await printReceipt({ ...fullPayment, items: feeItemsForReceipt, collected_by_name: collectorName }, schoolConfig)
 
-  // ── ENVOI DU SMS (non‑bloquant, silencieux en cas d'échec) ──
-  const studentPhone = fullPayment.students?.parent_phone || student?.parent_phone;
-  if (studentPhone) {
-    const totalRemainingBefore = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0);
-    const actualBalanceAfter = Math.max(0, totalRemainingBefore - totalAmount);
-    const smsMessage = formatPaymentSMS(
-      studentName,
-      totalAmount.toFixed(2),
-      receiptNum,
-      actualBalanceAfter.toFixed(2),
-      form.term
-    );
-    // Exécution en arrière-plan sans bloquer l'utilisateur
-    sendSMS(studentPhone, smsMessage).catch(err =>
-      console.error("[SMS] Non‑bloquant – envoi échoué :", err)
-    );
-  }
-}
-      
-      setMessage('✅ Payment recorded & receipt printed!')
-      await fetchPayments()
-      setTimeout(() => setShowForm(false), 1200)
+    try {
+      if (editPayment) {
+        const oldPayment = payments.find(p => p.id === editPayment.id)
+        const { data, error } = await supabase.from('fee_payments').update(payload).eq('id', editPayment.id).select().single()
+        if (error) throw error
+
+        await logAction({ action: 'UPDATE', tableName: 'fee_payments', recordId: data.id, oldData: oldPayment, newData: data, description: `Updated fee payment — ${data.payment_type} GHS ${data.amount} (${data.academic_year}, ${data.term}) · Receipt: ${data.receipt_number}` })
+        await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
+
+        setMessage('✅ Payment updated successfully!')
+        await fetchPayments()
+        setTimeout(() => setShowForm(false), 1200)
+      } else {
+        const { data, error } = await supabase.from('fee_payments').insert([payload]).select().single()
+        if (error) throw error
+
+        const student = students.find(s => s.id === data.student_id)
+        const studentName = student ? `${student.first_name} ${student.last_name}` : 'Unknown student'
+
+        await logAction({ action: 'CREATE', tableName: 'fee_payments', recordId: data.id, oldData: null, newData: data, description: `Fee payment recorded — ${studentName} · ${data.payment_type} GHS ${data.amount} · ${data.status} · ${data.academic_year} · ${data.term} · Receipt: ${data.receipt_number}` })
+        await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
+
+        const { data: fullPayment } = await supabase.from('fee_payments').select('*, students(first_name, last_name, class_id, parent_phone, classes(name))').eq('id', data.id).single()
+
+        if (fullPayment) {
+          // ── IMPRESSION DU REÇU (détail par prestation) ──
+          const feeItemsForReceipt = validLines.map(line => {
+            const feeInfo = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
+            return {
+              description: line.type,
+              amount_due: feeInfo ? feeInfo.annual : 0,
+              amount_paid: parseFloat(line.amount)
+            }
+          })
+          await printReceipt({ ...fullPayment, items: feeItemsForReceipt, collected_by_name: collectorName }, schoolConfig)
+
+          // ── ENVOI DU SMS (non‑bloquant, silencieux en cas d'échec) ──
+          const studentPhone = fullPayment.students?.parent_phone || student?.parent_phone
+          if (studentPhone) {
+            const totalRemainingBefore = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0)
+            const actualBalanceAfter = Math.max(0, totalRemainingBefore - totalAmount)
+            const smsMessage = formatPaymentSMS(
+              studentName,
+              totalAmount.toFixed(2),
+              receiptNum,
+              actualBalanceAfter.toFixed(2),
+              form.term
+            )
+            sendSMS(studentPhone, smsMessage).catch(err =>
+              console.error("[SMS] Non‑bloquant – envoi échoué :", err)
+            )
+          }
+        }
+
+        setMessage('✅ Payment recorded & receipt printed!')
+        await fetchPayments()
+        setTimeout(() => setShowForm(false), 1200)
+      }
+    } catch (err) { 
+      setMessage(`❌ Error: ${err.message}`) 
+    } finally { 
+      setSaving(false) 
     }
-  } catch (err) { 
-    setMessage(`❌ Error: ${err.message}`) 
-  } finally { 
-    setSaving(false) 
   }
-}
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this payment record?')) return

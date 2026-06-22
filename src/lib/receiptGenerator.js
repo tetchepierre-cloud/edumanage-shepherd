@@ -190,8 +190,9 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   let termExpected = 0;
   let termPaidBefore = 0;
 
-    if (classNameVal && classNameVal !== 'N/A') {
-    const levelName = classNameVal.trim().replace(/\s*[A-Za-z]$/, '').trim();
+  if (classNameVal && classNameVal !== 'N/A') {
+    // ⚠️ regex corrigée (espace obligatoire avant le suffixe)
+    const levelName = classNameVal.trim().replace(/\s+[A-Za-z]$/, '').trim();
     const { data: level } = await supabase.from('levels').select('id').ilike('name', levelName).maybeSingle();
     
     if (level) {
@@ -210,9 +211,19 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
         discountMap[d.fee_structure_id] = d;
       });
 
-      // Calcul du montant attendu après réductions
+      // ✅ Récupération des overrides de frais pour l'élève
+      const { data: overrides } = await supabase
+        .from('student_fee_overrides')
+        .select('fee_structure_id, override_amount')
+        .eq('student_id', payment.student_id);
+      const overrideMap = {};
+      (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
+
+      // Calcul du montant attendu avec overrides et réductions
       termExpected = (fees || []).reduce((s, f) => {
-        let amount = parseFloat(f.amount || 0);
+        let amount = overrideMap[f.id] !== undefined
+          ? parseFloat(overrideMap[f.id])
+          : parseFloat(f.amount || 0);
         const disc = discountMap[f.id];
         if (disc) {
           if (disc.discount_type === 'fixed') {
@@ -297,22 +308,20 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   const totalBalance = Math.max(0, termExpected - (termPaidBefore + amountPaidToday));
 
   if (totalBalance >= 0) {
-    const balanceBoxW = 90; // longueur augmentée
+    const balanceBoxW = 90;
     const balanceBoxX = A5_W - M - balanceBoxW;
-    const balanceBoxH = 10; // hauteur légèrement augmentée
+    const balanceBoxH = 10;
     const balanceY = summaryY + 10;
 
     fillRect(doc, balanceBoxX, balanceY, balanceBoxW, balanceBoxH, [254, 243, 199]);
     strokeRect(doc, balanceBoxX, balanceY, balanceBoxW, balanceBoxH, [253, 230, 138]);
 
-    // label avec police agrandie
     text(doc, `OUTSTANDING BALANCE – ${term} :`, balanceBoxX + 3, balanceY + 7, {
       size: 9,
       style: 'bold',
       color: AMBER
     });
 
-    // montant avec police agrandie
     const balanceStr = 'GHS ' + Number(totalBalance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     text(doc, balanceStr, A5_W - M - 3, balanceY + 7, {
       size: 11,
@@ -334,10 +343,10 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
 
   doc.setLineDashPattern([], 0)
 
-  // Message de remerciement pour les parents : Agrandit, mis en gras (Bleu AEIS) pour attirer le regard
+  // Message de remerciement pour les parents
   text(doc, 'Thank you for your partnership in investing in quality education.', A5_W / 2, A5_H - 6, { size: 9.5, style: 'bold', color: BLUE, align: 'center' })
 
-  // Filigrane vertical gauche (très discret)
+  // Filigrane vertical gauche
   doc.saveGraphicsState()
   const gState = new GState({ opacity: 0.45 })
   doc.setGState(gState)
@@ -347,7 +356,6 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   const leftMargin = 3
   const textStr = 'Powered by EduManage GH  •  +233 53 877 7840'
   const textWidth = doc.getTextWidth(textStr)
-  // Rotation de -90° pour que le texte monte de bas en haut (ou 90° pour l'inverse)
   doc.text(textStr, leftMargin, A5_H / 2 + textWidth / 2, { angle: 90 })
   doc.restoreGraphicsState()
 

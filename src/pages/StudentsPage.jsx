@@ -66,45 +66,77 @@ export default function StudentsPage() {
   }
 
   const loadDiscounts = async (student) => {
-    setLoadingDiscounts(true)
-    if (!student.classes?.name) { setDiscounts([]); setLoadingDiscounts(false); return }
+    setLoadingDiscounts(true);
+    if (!student.classes?.name) { setDiscounts([]); setLoadingDiscounts(false); return; }
     const className = student.classes.name.trim()
-    const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
-    const { data: level } = await supabase.from('levels').select('id').ilike('name', levelName).maybeSingle()
-    if (!level) { setDiscounts([]); setLoadingDiscounts(false); return }
-    const academicYear = '2025/2026'
+    const levelName = className.replace(/\s+[A-Za-z]$/, '').trim()
+    const { data: level } = await supabase.from('levels').select('id').ilike('name', levelName).maybeSingle();
+    if (!level) { setDiscounts([]); setLoadingDiscounts(false); return; }
+    const academicYear = '2025/2026';
     const { data: fees } = await supabase.from('fee_structure')
       .select('id, fee_name, fee_type, amount, term')
       .eq('level_id', level.id).eq('academic_year', academicYear).eq('is_active', true)
-      .order('term').order('fee_name')
-    const { data: existingDiscounts } = await supabase.from('student_fee_discounts').select('*').eq('student_id', student.id)
-    const discountMap = {}
-    ;(existingDiscounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
+      .order('term').order('fee_name');
+    const { data: existingDiscounts } = await supabase.from('student_fee_discounts').select('*').eq('student_id', student.id);
+    const discountMap = {};
+    (existingDiscounts || []).forEach(d => { discountMap[d.fee_structure_id] = d; });
+
+    // Récupérer les overrides pour cet élève
+    const { data: overrides } = await supabase
+      .from('student_fee_overrides')
+      .select('fee_structure_id, override_amount')
+      .eq('student_id', student.id);
+    const overrideMap = {};
+    (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
+
     const list = (fees || []).map(fee => ({
-      fee_structure_id: fee.id, fee_name: fee.fee_name, term: fee.term,
+      fee_structure_id: fee.id,
+      fee_name: fee.fee_name,
+      term: fee.term,
       annual_amount: parseFloat(fee.amount),
       discount_type: discountMap[fee.id]?.discount_type || 'percentage',
       discount_value: discountMap[fee.id]?.discount_value || 0,
-    }))
-    setDiscounts(list)
-    setLoadingDiscounts(false)
-  }
+      override_amount: overrideMap[fee.id] !== undefined ? overrideMap[fee.id] : null,   // null = pas d'override
+    }));
+    setDiscounts(list);
+    setLoadingDiscounts(false);
+  };
 
   const saveDiscount = async (discount) => {
-    const { fee_structure_id, discount_type, discount_value } = discount
-    const numValue = parseFloat(discount_value) || 0
-    if (numValue < 0) { setMessage('❌ Discount value cannot be negative.'); return }
-    if (numValue === 0) {
-      const { error } = await supabase.from('student_fee_discounts').delete().eq('student_id', editStudent.id).eq('fee_structure_id', fee_structure_id)
-      if (!error) { setDiscounts(prev => prev.map(d => d.fee_structure_id === fee_structure_id ? { ...d, discount_value: 0 } : d)) }
-      return
+    const { fee_structure_id, discount_type, discount_value, override_amount } = discount;
+    const numDiscount = parseFloat(discount_value) || 0;
+    if (numDiscount < 0) { setMessage('❌ Discount value cannot be negative.'); return; }
+
+    // Gérer la suppression / upsert de la réduction
+    if (numDiscount === 0) {
+      await supabase.from('student_fee_discounts').delete()
+        .eq('student_id', editStudent.id).eq('fee_structure_id', fee_structure_id);
+    } else {
+      await supabase.from('student_fee_discounts').upsert({
+        student_id: editStudent.id,
+        fee_structure_id,
+        discount_type,
+        discount_value: numDiscount,
+      }, { onConflict: 'student_id, fee_structure_id' });
     }
-    const { error } = await supabase.from('student_fee_discounts').upsert({
-      student_id: editStudent.id, fee_structure_id, discount_type, discount_value: numValue,
-    }, { onConflict: 'student_id, fee_structure_id' })
-    if (error) { setMessage('❌ Failed to save discount: ' + error.message) }
-    else { setMessage('✅ Discount saved!'); setDiscounts(prev => prev.map(d => d.fee_structure_id === fee_structure_id ? { ...d, discount_type, discount_value: numValue } : d)) }
-  }
+
+    // Gérer l'override
+    if (override_amount !== null && override_amount !== '' && override_amount >= 0) {
+      await supabase.from('student_fee_overrides').upsert({
+        student_id: editStudent.id,
+        fee_structure_id,
+        override_amount: parseFloat(override_amount),
+      }, { onConflict: 'student_id, fee_structure_id' });
+    } else {
+      // Si vide ou null, supprimer l'override
+      await supabase.from('student_fee_overrides').delete()
+        .eq('student_id', editStudent.id).eq('fee_structure_id', fee_structure_id);
+    }
+
+    setMessage('✅ Adjustments saved!');
+    // Recharger les discounts pour refléter les changements
+    loadDiscounts(editStudent);
+  };
 
   const openAddForm = () => {
     setEditStudent(null)
@@ -401,8 +433,30 @@ export default function StudentsPage() {
                     {discounts.map((discount, idx) => (
                       <div key={idx} className="border rounded-lg p-3 flex items-center gap-3">
                         <div className="flex-1"><p className="text-sm font-medium">{discount.fee_name}</p><p className="text-xs text-gray-500">{discount.term || 'Term ?'} · GHS {discount.annual_amount.toFixed(2)}</p></div>
+                        {/* Nouveau champ : Custom Amount (override) */}
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-gray-500">Custom</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={discount.override_amount !== null ? discount.override_amount : ''}
+                            placeholder={discount.annual_amount.toFixed(2)}
+                            onChange={e => {
+                              const val = e.target.value;
+                              const newList = [...discounts];
+                              newList[idx].override_amount = val === '' ? null : parseFloat(val);
+                              setDiscounts(newList);
+                            }}
+                            className="w-24 border rounded px-2 py-1 text-sm text-right"
+                          />
+                        </div>
+                        {/* Contrôles existants de réduction */}
                         <div className="flex items-center gap-2">
-                          <select value={discount.discount_type} onChange={e => { const newList = [...discounts]; newList[idx].discount_type = e.target.value; setDiscounts(newList); }} className="border rounded px-2 py-1 text-sm"><option value="percentage">%</option><option value="fixed">Fixed</option></select>
+                          <select value={discount.discount_type} onChange={e => { const newList = [...discounts]; newList[idx].discount_type = e.target.value; setDiscounts(newList); }} className="border rounded px-2 py-1 text-sm">
+                            <option value="percentage">%</option>
+                            <option value="fixed">Fixed</option>
+                          </select>
                           <input type="number" min="0" step="0.01" value={discount.discount_value} onChange={e => { const newList = [...discounts]; newList[idx].discount_value = e.target.value; setDiscounts(newList); }} className="w-24 border rounded px-2 py-1 text-sm text-right" />
                           <button onClick={() => saveDiscount(discount)} className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">Save</button>
                         </div>

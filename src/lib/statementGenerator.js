@@ -62,6 +62,14 @@ async function getExpectedTotalForStudent(student, academicYear, dateTo, term) {
   const discountMap = {}
   ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
 
+  // Récupérer les overrides pour cet élève
+  const { data: overrides } = await supabase
+    .from('student_fee_overrides')
+    .select('fee_structure_id, override_amount')
+    .eq('student_id', student.id)
+  const overrideMap = {}
+  ;(overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount })
+
   const feeIds = fees.map(f => f.id)
 
   const { data: schedules } = await supabase
@@ -78,6 +86,10 @@ async function getExpectedTotalForStudent(student, academicYear, dateTo, term) {
   let total = 0
   fees.forEach(f => {
     let feeTotal = totalByFee[f.id] || 0
+    // Appliquer l'override si présent
+    if (overrideMap[f.id] !== undefined) {
+      feeTotal = parseFloat(overrideMap[f.id])
+    }
     const disc = discountMap[f.id]
     if (disc) {
       if (disc.discount_type === 'fixed') feeTotal = Math.max(0, feeTotal - parseFloat(disc.discount_value))
@@ -303,7 +315,6 @@ export async function generateStudentStatement({
     })
     txt(doc, fmtD(r.date), colX[0] + 2, y + 4.5, { size: 7, color: BLACK })
     txt(doc, r.description, colX[1] + 2, y + 4.5, { size: 7, color: BLACK, maxWidth: colDesc - 3 })
-    // Pas de Expected
     txt(doc, r.paid > 0 ? ghs(r.paid) : '—', colX[2] + cols[2] - 1, y + 4.5, { size: 7, color: r.paid > 0 ? BLACK : [200,200,200], align: 'right' })
     const balColor = r.balance > 0 ? RED : (r.balance < 0 ? BLUE : GREEN)
     txt(doc, ghs(r.balance), colX[3] + cols[3] - 1, y + 4.5, { size: 7, style: 'bold', color: balColor, align: 'right' })
@@ -311,7 +322,6 @@ export async function generateStudentStatement({
     pageRemaining -= 6.5
   })
 
-  // Ligne TOTAUX (sans Expected)
   hline(doc, y, M, M + CW, BLUE, 0.5)
   y += 2
   fillRect(doc, M, y, CW, 8, BLUE_LT)
