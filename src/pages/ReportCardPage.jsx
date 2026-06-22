@@ -26,7 +26,6 @@ export default function ReportCardPage() {
   const [loading, setLoading] = useState(false);
   const [school, setSchool] = useState({ name: '', address: '', phone: '' });
 
-  // Prévisualisation KG
   const [kgPreview, setKgPreview] = useState(null);
 
   useEffect(() => {
@@ -252,11 +251,13 @@ export default function ReportCardPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="text-left px-4 py-3">Subject</th>
-                  <th className="text-center px-4 py-3">Mid-Term</th>
-                  <th className="text-center px-4 py-3">End-Term</th>
-                  <th className="text-center px-4 py-3">Average</th>
-                  <th className="text-center px-4 py-3">Grade</th>
+                  <th className="text-left px-4 py-3">SUBJECT</th>
+                  <th className="text-center px-4 py-3">S.B.A (50)</th>
+                  <th className="text-center px-4 py-3">EXAM (50)</th>
+                  <th className="text-center px-4 py-3">TOTAL (100)</th>
+                  <th className="text-center px-4 py-3">GRADE</th>
+                  <th className="text-center px-4 py-3">POS</th>
+                  <th className="text-center px-4 py-3">REMARKS</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -266,22 +267,36 @@ export default function ReportCardPage() {
                     <td className="px-4 py-2 text-center">{sub.midTermScore ?? '—'}</td>
                     <td className="px-4 py-2 text-center">{sub.endTermScore ?? '—'}</td>
                     <td className="px-4 py-2 text-center font-medium">{sub.average !== null ? sub.average.toFixed(1) : '—'}</td>
-                    <td className="px-4 py-2 text-center">{sub.average !== null ? getGrade(sub.average) : '—'}</td>
+                    <td className="px-4 py-2 text-center">{sub.average !== null ? sub.gradeLetter : '—'}</td>
+                    <td className="px-4 py-2 text-center">{sub.pos ?? '—'}</td>
+                    <td className="px-4 py-2 text-center">{sub.remarks ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot className="bg-gray-50 font-semibold">
                 <tr>
-                  <td colSpan={4} className="px-4 py-2 text-right">Overall Average</td>
-                  <td className="px-4 py-2 text-center">{report.overallAverage !== null ? report.overallAverage.toFixed(2) + '%' : 'N/A'}</td>
+                  <td colSpan={3} className="px-4 py-2 text-right">Total (all subjects)</td>
+                  <td className="px-4 py-2 text-center">{report.totalAllSubjects?.toFixed(1) ?? '—'}</td>
+                  <td colSpan={3}></td>
                 </tr>
                 <tr>
-                  <td colSpan={4} className="px-4 py-2 text-right">Grade</td>
-                  <td className="px-4 py-2 text-center">{report.grade || 'N/A'}</td>
+                  <td colSpan={3} className="px-4 py-2 text-right">Average</td>
+                  <td className="px-4 py-2 text-center">{report.overallAverage?.toFixed(2) ?? '—'}</td>
+                  <td colSpan={3}></td>
                 </tr>
                 <tr>
-                  <td colSpan={4} className="px-4 py-2 text-right">Rank</td>
-                  <td className="px-4 py-2 text-center">{report.rank ?? 'N/A'}</td>
+                  <td colSpan={3} className="px-4 py-2 text-right">Position (all subjects)</td>
+                  <td className="px-4 py-2 text-center">{report.rank ?? '—'}</td>
+                  <td colSpan={3}></td>
+                </tr>
+                <tr>
+                  <td colSpan={7} className="px-4 py-2">
+                    <p><strong>A = ADVANCED</strong> &nbsp; P = PROFICIENT &nbsp; AP = APPROACHING PROFICIENCY &nbsp; D = DEVELOPING &nbsp; B = BEGINNING</p>
+                    <p className="mt-2"><strong>Class teachers' remarks:</strong></p>
+                    <p className="italic">(aucune remarque inscrite)</p>
+                    <p className="mt-2"><strong>Signature/stamp</strong></p>
+                    <p className="mt-2"><strong>School Director</strong></p>
+                  </td>
                 </tr>
               </tfoot>
             </table>
@@ -290,13 +305,4 @@ export default function ReportCardPage() {
       )}
     </div>
   );
-}
-
-function getGrade(score) {
-  if (score >= 80) return 'A';
-  if (score >= 70) return 'B';
-  if (score >= 60) return 'C';
-  if (score >= 50) return 'D';
-  if (score >= 40) return 'E';
-  return 'F';
 }

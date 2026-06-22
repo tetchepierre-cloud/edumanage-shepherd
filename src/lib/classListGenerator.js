@@ -31,7 +31,7 @@ export async function generateClassListPDF({ className, students, school }) {
 
   // --- En-tête école (avec logo si disponible) ---
   if (logoData) {
-    const logoSize = 36;
+    const logoSize = 30.6;
     // Logo remonté : positionné tout en haut, à la marge
     doc.addImage(logoData, 'JPEG', margin, margin - 15, logoSize, logoSize);
     const textX = margin + logoSize + 4;
