@@ -257,7 +257,7 @@ export default function FeesPage() {
         alreadyPaid,
         remaining,
         feeStructureId: f.feeStructureId,
-        requiredForAdmission: f.required_forAdmission,
+        requiredForAdmission: f.required_for_admission,
       }
     })
   }
@@ -444,44 +444,8 @@ export default function FeesPage() {
       return 
     }
 
-<<<<<<< HEAD
     const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
     const validLines = feeLines.filter(l => parseFloat(l.amount) > 0)
-=======
-  // ---> AJOUT 1 : Récupérer le vrai nom AVANT l'insertion
-  const { data: { user } } = await supabase.auth.getUser()
-  let collectorName = 'Accountant'
-  if (user) {
-    const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle()
-    collectorName = profile?.full_name || user.email || 'Accountant'
-  }
-  
-<<<<<<< HEAD
-    // Déterminer le statut en fonction du solde restant après ce paiement
-    const totalRemaining = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0);
-    const remainingAfterPayment = totalRemaining - totalAmount;
-    const paymentStatus = remainingAfterPayment <= 0.01 ? 'paid' : 'partial';
-
-    const payload = {
-        student_id: form.student_id, 
-        amount: totalAmount,
-        payment_type: validLines.length > 1 ? 'Multiple' : validLines[0].type,
-        payment_method: form.payment_method, 
-        receipt_number: receiptNum, 
-        status: paymentStatus,
-        academic_year: form.academic_year, 
-        term: form.term, 
-        payment_date: form.payment_date,
-        notes: form.notes.trim() || null, 
-        fee_items: validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
-        collected_by_name: collectorName,
-    };
-=======
-  // Déterminer le statut en fonction du solde restant après ce paiement
-  const totalRemaining = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0);
-  const remainingAfterPayment = totalRemaining - totalAmount;
-  const paymentStatus = remainingAfterPayment <= 0.01 ? 'paid' : 'partial';
->>>>>>> cd78000bcd62fa064575295ef678f63e4d26b455
 
     if (validLines.length === 0) { 
       setMessage('❌ Add at least one fee item with amount > 0.')
@@ -526,45 +490,6 @@ export default function FeesPage() {
       notes: form.notes.trim() || null, 
       fee_items: validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
       collected_by_name: collectorName,
-<<<<<<< HEAD
-=======
-  }
->>>>>>> 3cb7c905dd3b61fcfdbbc5976b80236482d2596a
-  
-  try {
-    if (editPayment) {
-      const oldPayment = payments.find(p => p.id === editPayment.id)
-      const { data, error } = await supabase.from('fee_payments').update(payload).eq('id', editPayment.id).select().single()
-      if (error) throw error
-      
-      await logAction({ action: 'UPDATE', tableName: 'fee_payments', recordId: data.id, oldData: oldPayment, newData: data, description: `Updated fee payment — ${data.payment_type} GHS ${data.amount} (${data.academic_year}, ${data.term}) · Receipt: ${data.receipt_number}` })
-      await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
-      
-      setMessage('✅ Payment updated successfully!')
-      await fetchPayments()
-      setTimeout(() => setShowForm(false), 1200)
-      
-    } else {
-      const { data, error } = await supabase.from('fee_payments').insert([payload]).select().single()
-      if (error) throw error
-      
-      const student = students.find(s => s.id === data.student_id)
-      const studentName = student ? `${student.first_name} ${student.last_name}` : 'Unknown student'
-      
-      await logAction({ action: 'CREATE', tableName: 'fee_payments', recordId: data.id, oldData: null, newData: data, description: `Fee payment recorded — ${studentName} · ${data.payment_type} GHS ${data.amount} · ${data.status} · ${data.academic_year} · ${data.term} · Receipt: ${data.receipt_number}` })
-      await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
-      
-      const { data: fullPayment } = await supabase.from('fee_payments').select('*, students(first_name, last_name, class_id, parent_phone, classes(name))').eq('id', data.id).single()
-      
-      if (fullPayment) {
-  // ── IMPRESSION DU REÇU (détail par prestation) ──
-  const feeItemsForReceipt = validLines.map(line => {
-    const feeInfo = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
-    return {
-      description: line.type,
-      amount_due: feeInfo ? feeInfo.annual : 0,
-      amount_paid: parseFloat(line.amount)
->>>>>>> cd78000bcd62fa064575295ef678f63e4d26b455
     }
 
     try {
