@@ -1,6 +1,7 @@
 // src/lib/discountReportGenerator.js
 import { jsPDF } from 'jspdf'
 import { supabase } from './supabase'
+import { sortClasses } from './classOrder'   // ← tri institutionnel
 
 const A4_W = 210, A4_H = 297, M = 12, CW = A4_W - M * 2
 
@@ -29,7 +30,7 @@ export async function generateDiscountReport({
     phone:   safeConfig.phone   || '+233 20 000 0000',
   }
 
-  // Appel direct à la vue SQL (plus besoin de déclarer les relations complexes)
+  // Appel à la vue SQL
   let query = supabase
     .from('view_student_fee_discounts')
     .select('*')
@@ -95,53 +96,122 @@ export async function generateDiscountReport({
     })
   }
 
-  drawTableHeader(y)
-  y += 7
+  const termsOrder = ['Term 1', 'Term 2', 'Term 3']
 
-  let lastTerm = null
-  rows.forEach((r, idx) => {
-    if (r.term !== lastTerm && lastTerm !== null) {
-      y += 3
-      fillRect(doc, M, y, CW, 0.5, MGRAY)
-      y += 3
-    }
-    lastTerm = r.term
-
-    if (y + 7 > A4_H - 25) {
-      doc.addPage()
-      y = 20
-      drawTableHeader(y)
-      y += 7
-    }
-
-    const bg = idx % 2 === 0 ? WHITE : [250,250,252]
-    fillRect(doc, M, y, CW, 6, bg)
-    strokeRect(doc, M, y, CW, 6, MGRAY)
-    txt(doc, r.studentName,     colX[0]+2, y+4, { size:7, color: BLACK })
-    txt(doc, r.className,       colX[1]+2, y+4, { size:7, color: BLACK })
-    txt(doc, r.feeName,         colX[2]+2, y+4, { size:7, color: BLACK })
-    txt(doc, r.term,            colX[3]+2, y+4, { size:7, color: BLACK })
-    txt(doc, r.discountType,    colX[4]+colW[4]-1, y+4, { size:7, color: r.discountType.includes('%') ? RED : GREEN, align:'right' })
-    txt(doc, fmtGHS(r.originalAmount), colX[5]+colW[5]-1, y+4, { size:7, color: BLACK, align:'right' })
-    txt(doc, fmtGHS(r.discountedAmount), colX[6]+colW[6]-1, y+4, { size:7, style:'bold', color: GREEN, align:'right' })
-    y += 6
+  // Regroupement Term → Classe → lignes
+  const grouped = {}
+  rows.forEach(r => {
+    if (!grouped[r.term]) grouped[r.term] = {}
+    if (!grouped[r.term][r.className]) grouped[r.term][r.className] = []
+    grouped[r.term][r.className].push(r)
   })
 
-  hline(doc, y, BLUE, 0.5)
+  let grandTotalOriginal = 0
+  let grandTotalDiscounted = 0
+  let grandCount = 0
+
+  termsOrder.forEach((currentTerm, termIndex) => {
+    const termGroup = grouped[currentTerm]
+    if (!termGroup) return
+
+    // Titre du terme
+    if (termIndex > 0) y += 5
+    txt(doc, currentTerm, M, y, { size: 11, style: 'bold', color: BLUE })
+    y += 8
+
+    // Classes triées selon l'ordre institutionnel
+    const classes = sortClasses(Object.keys(termGroup).map(name => ({ name }))).map(c => c.name)
+    let termTotalOriginal = 0
+    let termTotalDiscounted = 0
+    let termCount = 0
+
+    classes.forEach((cls, clsIdx) => {
+      if (clsIdx > 0) y += 3   // petit espace entre classes
+
+      // Nom de la classe (sous-titre)
+      txt(doc, cls, M, y, { size: 9, style: 'bold', color: DGRAY })
+      y += 6
+
+      // En-tête du tableau pour cette classe
+      drawTableHeader(y)
+      y += 7
+
+      let classTotalOriginal = 0
+      let classTotalDiscounted = 0
+      let classCount = 0
+
+      termGroup[cls].forEach((r, idx) => {
+        if (y + 7 > A4_H - 25) {
+          doc.addPage()
+          y = 20
+          // Rappel du terme et de la classe sur la nouvelle page
+          txt(doc, currentTerm + ' – ' + cls, M, y, { size: 9, style: 'bold', color: BLUE })
+          y += 8
+          drawTableHeader(y)
+          y += 7
+        }
+
+        const bg = idx % 2 === 0 ? WHITE : [250,250,252]
+        fillRect(doc, M, y, CW, 6, bg)
+        strokeRect(doc, M, y, CW, 6, MGRAY)
+        txt(doc, r.studentName,     colX[0]+2, y+4, { size:7, color: BLACK })
+        txt(doc, r.className,       colX[1]+2, y+4, { size:7, color: BLACK })
+        txt(doc, r.feeName,         colX[2]+2, y+4, { size:7, color: BLACK })
+        txt(doc, r.term,            colX[3]+2, y+4, { size:7, color: BLACK })
+        txt(doc, r.discountType,    colX[4]+colW[4]-1, y+4, { size:7, color: r.discountType.includes('%') ? RED : GREEN, align:'right' })
+        txt(doc, fmtGHS(r.originalAmount), colX[5]+colW[5]-1, y+4, { size:7, color: BLACK, align:'right' })
+        txt(doc, fmtGHS(r.discountedAmount), colX[6]+colW[6]-1, y+4, { size:7, style:'bold', color: GREEN, align:'right' })
+        y += 6
+
+        classTotalOriginal += r.originalAmount
+        classTotalDiscounted += r.discountedAmount
+        classCount++
+      })
+
+      // Sous-total de la classe
+      if (classCount > 0) {
+        hline(doc, y, MGRAY, 0.5)
+        y += 2
+        txt(doc, `Subtotal – ${cls} (${classCount} discount(s))`, M+2, y+4, { size:7, style:'bold', color: BLUE })
+        txt(doc, fmtGHS(classTotalOriginal), colX[5]+colW[5]-1, y+4, { size:7, style:'bold', color: BLUE, align:'right' })
+        txt(doc, fmtGHS(classTotalDiscounted), colX[6]+colW[6]-1, y+4, { size:7, style:'bold', color: GREEN, align:'right' })
+        y += 6
+      }
+
+      termTotalOriginal += classTotalOriginal
+      termTotalDiscounted += classTotalDiscounted
+      termCount += classCount
+    })
+
+    // Total du terme
+    hline(doc, y, BLUE, 0.8)
+    y += 2
+    fillRect(doc, M, y, CW, 8, BLUE_LT)
+    strokeRect(doc, M, y, CW, 8, BLUE, 0.5)
+    txt(doc, `TOTAL – ${currentTerm} (${termCount} discount(s))`, M+2, y+5, { size:8, style:'bold', color:BLUE })
+    txt(doc, fmtGHS(termTotalOriginal), colX[5]+colW[5]-1, y+5, { size:8, style:'bold', color:BLUE, align:'right' })
+    txt(doc, fmtGHS(termTotalDiscounted), colX[6]+colW[6]-1, y+5, { size:8, style:'bold', color:GREEN, align:'right' })
+    y += 10
+
+    grandTotalOriginal += termTotalOriginal
+    grandTotalDiscounted += termTotalDiscounted
+    grandCount += termCount
+  })
+
+  // Grand total final (tous les termes)
+  hline(doc, y, BLUE, 1)
   y += 2
-  fillRect(doc, M, y, CW, 8, BLUE_LT)
-  strokeRect(doc, M, y, CW, 8, BLUE, 0.5)
-  txt(doc, `TOTAL: ${rows.length} discount(s)`, M+2, y+5, { size:8, style:'bold', color:BLUE })
-  const totalOriginal = rows.reduce((s, r) => s + r.originalAmount, 0)
-  const totalDiscounted = rows.reduce((s, r) => s + r.discountedAmount, 0)
-  txt(doc, fmtGHS(totalOriginal), colX[5]+colW[5]-1, y+5, { size:8, style:'bold', color:BLUE, align:'right' })
-  txt(doc, fmtGHS(totalDiscounted), colX[6]+colW[6]-1, y+5, { size:8, style:'bold', color:GREEN, align:'right' })
-  y += 12
+  fillRect(doc, M, y, CW, 10, BLUE_LT)
+  strokeRect(doc, M, y, CW, 10, BLUE, 1)
+  txt(doc, `GRAND TOTAL (${grandCount} discounts)`, M+2, y+6, { size:9, style:'bold', color:BLUE })
+  txt(doc, fmtGHS(grandTotalOriginal), colX[5]+colW[5]-1, y+6, { size:9, style:'bold', color:BLUE, align:'right' })
+  txt(doc, fmtGHS(grandTotalDiscounted), colX[6]+colW[6]-1, y+6, { size:9, style:'bold', color:GREEN, align:'right' })
+  y += 14
 
   fillRect(doc, 0, A4_H - 9, A4_W, 9, BLUE)
   txt(doc, `Generated on ${new Date().toLocaleDateString('en-GB')} — ${school.name} — EduManage`,
     A4_W / 2, A4_H - 3.5, { size: 6.5, color: [180, 210, 245], align: 'center' })
 
-  const fileName = `Discount_Report_${academicYear.replace('/', '-')}.pdf`
-  doc.save(fileName)
+  // Ouverture dans un nouvel onglet (pas de téléchargement)
+  window.open(URL.createObjectURL(doc.output('blob')), '_blank')
 }
