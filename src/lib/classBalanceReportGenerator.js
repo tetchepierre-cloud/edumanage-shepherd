@@ -18,7 +18,8 @@ function txt(doc, str, x, y, opts = {}) { doc.setTextColor(...(opts.color || BLA
 function fmtGHS(n) { return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', { minimumFractionDigits: 2 }) }
 
 /**
- * Calcule le total attendu pour un élève et une année académique, avec filtre optionnel par terme
+ * Calcule le total attendu pour un élève et une année académique, avec filtre optionnel par terme.
+ * Prend désormais en compte les overrides de frais (student_fee_overrides).
  */
 async function getExpectedForStudent(studentId, academicYear, term) {
   const { data: student } = await supabase
@@ -45,6 +46,7 @@ async function getExpectedForStudent(studentId, academicYear, term) {
   const { data: fees } = await feeQuery
   if (!fees?.length) return 0
 
+  // 1. Charger les réductions
   const { data: discounts } = await supabase
     .from('student_fee_discounts')
     .select('fee_structure_id, discount_type, discount_value')
@@ -53,13 +55,30 @@ async function getExpectedForStudent(studentId, academicYear, term) {
   const discountMap = {}
   ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
 
+  // 2. Charger les overrides de frais
+  const { data: overrides } = await supabase
+    .from('student_fee_overrides')
+    .select('fee_structure_id, override_amount')
+    .eq('student_id', studentId)
+
+  const overrideMap = {}
+  ;(overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount })
+
+  // 3. Calculer le total avec overrides PUIS réductions
   let total = 0
   fees.forEach(f => {
-    let amount = parseFloat(f.amount)
+    // Si un override existe, on l'utilise, sinon on prend le montant standard
+    let amount = overrideMap[f.id] !== undefined
+      ? parseFloat(overrideMap[f.id])
+      : parseFloat(f.amount)
+
     const disc = discountMap[f.id]
     if (disc) {
-      if (disc.discount_type === 'fixed') amount = Math.max(0, amount - parseFloat(disc.discount_value))
-      else amount *= (1 - parseFloat(disc.discount_value) / 100)
+      if (disc.discount_type === 'fixed') {
+        amount = Math.max(0, amount - parseFloat(disc.discount_value))
+      } else {
+        amount *= (1 - parseFloat(disc.discount_value) / 100)
+      }
     }
     total += amount
   })
@@ -95,7 +114,7 @@ export async function generateClassBalanceReport({
   classId,
   academicYear,
   schoolConfig = {},
-  term = null,             // ← nouveau paramètre optionnel
+  term = null,
 }) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
 

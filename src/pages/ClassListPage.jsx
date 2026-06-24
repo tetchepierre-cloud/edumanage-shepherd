@@ -30,7 +30,7 @@ export default function ClassListPage() {
 
   const fetchClasses = async () => {
     try {
-      const { data, error } = await supabase.from('classes').select('id, name').order('name');
+      const { data, error } = await supabase.from('classes').select('id, name').order('sort_order');
       if (error) console.error('fetchClasses error:', error);
       setClasses(data || []);
       if (data && data.length > 0 && !selectedClass) {

@@ -38,7 +38,7 @@ export default function BehaviorPage() {
   }, [selectedClass]);
 
   const fetchClasses = async () => {
-    const { data } = await supabase.from('classes').select('id, name').order('name');
+    const { data } = await supabase.from('classes').select('id, name').order('sort_order');
     setClasses(data || []);
     if (data?.length && !selectedClass) setSelectedClass(data[0].id);
   };

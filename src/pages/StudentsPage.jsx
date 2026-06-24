@@ -32,7 +32,7 @@ export default function StudentsPage() {
   }, [])
 
   const fetchClasses = async () => {
-    const { data } = await supabase.from('classes').select('id, name').order('name')
+    const { data } = await supabase.from('classes').select('id, name').order('sort_order')
     setClasses(data || [])
   }
 

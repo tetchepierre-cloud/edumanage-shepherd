@@ -9,6 +9,7 @@ import { generateDiscountReport } from '../lib/discountReportGenerator'
 import { generateClassBalanceReport } from '../lib/classBalanceReportGenerator'
 import { sendSMS, formatPaymentSMS } from '../lib/sms'
 import { CanAct, CanSee } from '../components/PermissionGate'
+import { generateOutstandingReport } from '../lib/outstandingReportGenerator';
 
 const PAYMENT_TYPES  = ['Tuition', 'Uniform', 'Books', 'Exam', 'Other']
 const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Bank Transfer', 'Cheque']
@@ -93,6 +94,7 @@ export default function FeesPage() {
   const [showClassBalanceModal, setShowClassBalanceModal] = useState(false)
   const [selectedBalanceClass, setSelectedBalanceClass] = useState('')
   const [selectedBalanceYear, setSelectedBalanceYear] = useState('2025/2026')
+  const [outstandingFilterPercent, setOutstandingFilterPercent] = useState(0);
   
   useEffect(() => { fetchAll(); loadSchoolConfig() }, [])
 
@@ -129,7 +131,7 @@ export default function FeesPage() {
     const { data } = await supabase
       .from('classes')
       .select('id, name')
-      .order('name')
+      .order('sort_order')
     setClasses(data || [])
   }
 
@@ -604,6 +606,30 @@ export default function FeesPage() {
           <CanAct module="fees" section="header" element="Student Statement button"><button onClick={handleOpenStatementModal} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Student Statement">📄 Statement</button></CanAct>
           <CanAct module="fees" section="header" element="Discounts button"><button onClick={handleOpenDiscountReport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Discount Report">🏷️ Discounts</button></CanAct>
           <CanAct module="fees" section="header" element="Class Balance button"><button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Class Balance Report">📊 Class Balance</button></CanAct>
+          
+          <CanAct module="fees" section="header" element="Outstanding Balances button">
+            <div className="flex items-center gap-1">
+              <select
+                value={outstandingFilterPercent}
+                onChange={e => setOutstandingFilterPercent(Number(e.target.value))}
+                className="border border-gray-300 rounded-lg px-2 py-2 text-sm bg-white"
+              >
+                <option value={0}>Any balance</option>
+                <option value={25}>≥ 25%</option>
+                <option value={50}>≥ 50%</option>
+                <option value={75}>≥ 75%</option>
+                <option value={100}>100%</option>
+              </select>
+              <button
+                onClick={() => generateOutstandingReport(outstandingFilterPercent)}
+                className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                title="Outstanding Balances Report"
+              >
+                📋 Outstanding
+              </button>
+            </div>
+          </CanAct>
+
         </div>
       </div>
 

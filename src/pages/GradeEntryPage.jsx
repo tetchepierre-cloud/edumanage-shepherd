@@ -38,7 +38,7 @@ export default function GradeEntryPage() {
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
-    supabase.from('classes').select('id, name').order('name')
+    supabase.from('classes').select('id, name').order('sort_order')
       .then(({ data }) => setClasses(data || []));
   }, []);
 
