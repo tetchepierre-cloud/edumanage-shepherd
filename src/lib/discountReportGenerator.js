@@ -20,50 +20,55 @@ export async function generateDiscountReport({
   schoolConfig = {},
   term = null,
 }) {
+  const safeConfig = schoolConfig || {}
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
 
   const school = {
-    name:    (schoolConfig.school_name || 'BRIGHT FUTURE SCHOOL').toUpperCase(),
-    address: schoolConfig.address || 'Tamale, Northern Region',
-    phone:   schoolConfig.phone   || '+233 20 000 0000',
+    name:    (safeConfig.school_name || 'BRIGHT FUTURE SCHOOL').toUpperCase(),
+    address: safeConfig.address || 'Tamale, Northern Region',
+    phone:   safeConfig.phone   || '+233 20 000 0000',
   }
 
+  // Appel direct à la vue SQL (plus besoin de déclarer les relations complexes)
   let query = supabase
-    .from('student_fee_discounts')
-    .select(`
-      discount_type, discount_value, created_at,
-      students!inner(first_name, last_name, class_id, classes!inner(name)),
-      fee_structure!inner(fee_name, fee_type, amount, term, academic_year)
-    `)
-    .eq('fee_structure.academic_year', academicYear)
+    .from('view_student_fee_discounts')
+    .select('*')
+    .eq('academic_year', academicYear)
 
   if (term) {
-    query = query.eq('fee_structure.term', term)
+    query = query.eq('term', term)
   }
 
-  const { data: discounts, error } = await query.order('created_at', { ascending: false })
+  const { data: discounts, error } = await query
 
   if (error || !discounts?.length) {
-    txt(doc, 'No discounts found for the selected period.', M, 40, { size: 10, color: RED })
-    window.open(URL.createObjectURL(doc.output('blob')), '_blank')
+    alert(error ? `Database Error: ${error.message}` : `No discounts found for the academic year ${academicYear}${term ? ` and ${term}` : ''}.`);
     return
   }
 
-  // Construire les lignes avec le terme
-  const rows = discounts.map(d => ({
-    studentName: `${d.students.first_name} ${d.students.last_name}`,
-    className: d.students.classes?.name || '—',
-    feeName: d.fee_structure.fee_name,
-    term: d.fee_structure.term || '—',
-    discountType: d.discount_type === 'percentage' ? `${d.discount_value}%` : `Fixed GHS ${d.discount_value}`,
-    originalAmount: parseFloat(d.fee_structure.amount),
-    discountedAmount: d.discount_type === 'percentage'
-      ? parseFloat((d.fee_structure.amount * (1 - d.discount_value / 100)).toFixed(2))
-      : Math.max(0, parseFloat(d.fee_structure.amount) - parseFloat(d.discount_value)),
-    date: new Date(d.created_at).toLocaleDateString('en-GB'),
-  }))
+  // Mapping à plat et sécurisé depuis la vue
+  const rows = discounts.map(d => {
+    const origAmt = parseFloat(d.original_amount || 0)
+    const discVal = parseFloat(d.discount_value || 0)
+    
+    let discAmt = 0
+    if (d.discount_type === 'percentage') {
+      discAmt = parseFloat((origAmt * (1 - discVal / 100)).toFixed(2))
+    } else {
+      discAmt = Math.max(0, origAmt - discVal)
+    }
 
-  // Trier par terme pour le regroupement
+    return {
+      studentName: `${d.student_first_name || ''} ${d.student_last_name || ''}`.trim(),
+      className: d.class_name || '—',
+      feeName: d.fee_name || '—',
+      term: d.term || '—',
+      discountType: d.discount_type === 'percentage' ? `${discVal}%` : `Fixed GHS ${discVal}`,
+      originalAmount: origAmt,
+      discountedAmount: discAmt
+    }
+  })
+
   rows.sort((a, b) => a.term.localeCompare(b.term) || a.studentName.localeCompare(b.studentName))
 
   let y = 0
@@ -79,12 +84,10 @@ export async function generateDiscountReport({
   txt(doc, infoLine, M, y, { size: 9, style: 'bold', color: BLACK })
   y += 10
 
-  // Tableau : Student | Class | Fee | Term | Discount | Original | After Discount
   const colW = [34, 22, 24, 16, 24, 24, 28]
   const colX = [M, M+colW[0], M+colW[0]+colW[1], M+colW[0]+colW[1]+colW[2], M+colW[0]+colW[1]+colW[2]+colW[3], M+colW[0]+colW[1]+colW[2]+colW[3]+colW[4], M+colW[0]+colW[1]+colW[2]+colW[3]+colW[4]+colW[5]]
   const headers = ['Student', 'Class', 'Fee', 'Term', 'Discount', 'Original', 'After Disc.']
 
-  // Fonction pour dessiner l'en-tête du tableau
   function drawTableHeader(yPos) {
     fillRect(doc, M, yPos, CW, 7, BLUE)
     headers.forEach((h, i) => {
@@ -95,19 +98,15 @@ export async function generateDiscountReport({
   drawTableHeader(y)
   y += 7
 
-  // Parcourir les lignes avec regroupement par terme
   let lastTerm = null
   rows.forEach((r, idx) => {
-    // Insérer un espace avant chaque nouveau groupe de terme (sauf le premier)
     if (r.term !== lastTerm && lastTerm !== null) {
-      // Ligne de séparation grise
       y += 3
       fillRect(doc, M, y, CW, 0.5, MGRAY)
       y += 3
     }
     lastTerm = r.term
 
-    // Saut de page si nécessaire
     if (y + 7 > A4_H - 25) {
       doc.addPage()
       y = 20
@@ -128,7 +127,6 @@ export async function generateDiscountReport({
     y += 6
   })
 
-  // Ligne total
   hline(doc, y, BLUE, 0.5)
   y += 2
   fillRect(doc, M, y, CW, 8, BLUE_LT)
@@ -141,8 +139,9 @@ export async function generateDiscountReport({
   y += 12
 
   fillRect(doc, 0, A4_H - 9, A4_W, 9, BLUE)
-  txt(doc, `Generated on ${new Date().toLocaleDateString('en-GB')} — ${school.name} — EduManage GH`,
+  txt(doc, `Generated on ${new Date().toLocaleDateString('en-GB')} — ${school.name} — EduManage`,
     A4_W / 2, A4_H - 3.5, { size: 6.5, color: [180, 210, 245], align: 'center' })
 
-  window.open(URL.createObjectURL(doc.output('blob')), '_blank')
+  const fileName = `Discount_Report_${academicYear.replace('/', '-')}.pdf`
+  doc.save(fileName)
 }
