@@ -40,7 +40,13 @@ export default function ReportCardPage() {
     const { data } = await supabase.from('app_settings').select('*');
     const cfg = {};
     data?.forEach(d => { cfg[d.key] = d.value; });
-    setSchool({ name: cfg.school_name || 'School', address: cfg.address || '', phone: cfg.phone || '' });
+    setSchool({
+      name:    cfg.school_name || 'School',
+      address: cfg.address     || '',
+      phone:   cfg.phone       || '',
+      email:   cfg.email       || '',
+      logo:    cfg.logo        || null,   // ← ajouté
+    });
   };
 
   useEffect(() => {

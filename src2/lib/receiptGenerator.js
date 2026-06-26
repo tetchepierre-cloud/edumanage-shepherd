@@ -354,7 +354,7 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   doc.setTextColor(120, 120, 120)
   doc.setFont('helvetica', 'normal')
   const leftMargin = 3
-  const textStr = 'Powered by EduManage GH  •  +233 53 877 7840'
+  const textStr = 'Powered by EduManage GH  •  +233 59 643 8500'
   const textWidth = doc.getTextWidth(textStr)
   doc.text(textStr, leftMargin, A5_H / 2 + textWidth / 2, { angle: 90 })
   doc.restoreGraphicsState()
