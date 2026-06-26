@@ -1,4 +1,4 @@
-// src/pages/StockPage.jsx
+// src2/pages/StockPage.jsx
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { CanAct, CanSee } from '../components/PermissionGate';
@@ -28,24 +28,344 @@ const Toast = ({ message, type, onClose }) => {
 };
 
 // ============================================================
+// STANDARD INVENTORY CATEGORIES (as in school 1)
+// ============================================================
+const INVENTORY_CATEGORIES = [
+  'Stationery',
+  'Furniture',
+  'Cleaning Supplies',
+  'Electronics',
+  'Sports & P.E.',
+  'Uniforms & Clothing',
+  'Textbooks & Books',
+  'Canteen Supplies',
+  'Medical Supplies',
+  'ICT Equipment',
+  'Art & Creative',
+  'General',
+];
+
+const INVENTORY_UNITS = [
+  'pcs',
+  'box',
+  'pack',
+  'ream',
+  'set',
+  'pair',
+  'dozen',
+  'kg',
+  'g',
+  'L',
+  'mL',
+  'm',
+  'cm',
+  'roll',
+  'bottle',
+  'tube',
+  'carton',
+  'piece',
+  'unit',
+];
+
+// ============================================================
 // ADD ITEM MODAL
 // ============================================================
 const AddItemModal = ({ onClose, onSuccess, showToast, existingItems }) => {
-  // ... (inchangé)
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    name: '', category: '', unit: '', unit_price: '', minimum_stock: ''
+  });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    
+    try {
+      if (existingItems?.some(i => i.name.toLowerCase() === form.name.trim().toLowerCase())) {
+        throw new Error("An item with this name already exists in inventory.");
+      }
+
+      const { error } = await supabase.from('stock_items').insert([{
+        name: form.name.trim(),
+        category: form.category || 'General',
+        unit: form.unit.trim() || 'pcs',
+        unit_price: parseFloat(form.unit_price) || 0,
+        minimum_stock: parseInt(form.minimum_stock) || 0,
+        is_active: true
+      }]);
+
+      if (error) throw error;
+      
+      showToast('Item added successfully', 'success');
+      onSuccess();
+      onClose();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+        <div className="p-5 border-b flex justify-between items-center bg-gray-50">
+          <h2 className="text-lg font-bold text-gray-800">➕ New Item</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Item Name *</label>
+            <input required type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+              <select value={form.category} onChange={e => setForm({...form, category: e.target.value})}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                <option value="">-- Select Category --</option>
+                {INVENTORY_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Unit</label>
+              <select value={form.unit} onChange={e => setForm({...form, unit: e.target.value})}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                <option value="">-- Select Unit --</option>
+                {INVENTORY_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Unit Price (GHS)</label>
+              <input type="number" step="0.01" min="0" value={form.unit_price} onChange={e => setForm({...form, unit_price: e.target.value})}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Minimum Stock</label>
+              <input type="number" min="0" value={form.minimum_stock} onChange={e => setForm({...form, minimum_stock: e.target.value})}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-4 border-t mt-6">
+            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving} className="flex-1 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg font-medium transition flex justify-center items-center">
+              {saving ? <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" /> : 'Save Item'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 };
 
 // ============================================================
 // MOVEMENT MODAL (IN / OUT)
 // ============================================================
 const MovementModal = ({ item, movementType, onClose, onSuccess, showToast }) => {
-  // ... (inchangé)
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ quantity: '', reason: '', unit_cost: '', reference: '', notes: '' });
+
+  const isIN = movementType === 'IN';
+  const defaultReasons = isIN 
+    ? ['Purchase', 'Donation', 'Return', 'Correction', 'Initial Stock'] 
+    : ['Usage', 'Damage', 'Loss', 'Correction', 'Other'];
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    
+    try {
+      const qty = parseFloat(form.quantity);
+      if (qty <= 0) throw new Error("Quantity must be greater than 0.");
+      if (!isIN && qty > item.quantity) throw new Error("Insufficient stock for this withdrawal.");
+
+      const payload = {
+        stock_item_id: item.id,
+        type: movementType,
+        quantity: qty,
+        reason: form.reason || defaultReasons[0],
+        reference: form.reference.trim() || null,
+        notes: form.notes.trim() || null,
+        unit_cost: isIN ? (parseFloat(form.unit_cost) || null) : null
+      };
+
+      const { error } = await supabase.from('stock_movements').insert([payload]);
+      
+      if (error) throw error;
+
+      showToast(`Stock ${movementType} recorded successfully`, 'success');
+      onSuccess();
+      onClose();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+        <div className={`p-5 border-b flex justify-between items-center ${isIN ? 'bg-green-50' : 'bg-red-50'}`}>
+          <h2 className={`text-lg font-bold ${isIN ? 'text-green-800' : 'text-red-800'}`}>
+            {isIN ? '📥 Stock IN' : '📤 Stock OUT'} - {item.name}
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div className="bg-gray-50 p-3 rounded-lg flex justify-between items-center text-sm border border-gray-100">
+            <span className="text-gray-500">Current Stock:</span>
+            <span className="font-bold text-gray-800">{item.quantity} {item.unit}</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity *</label>
+              <input required type="number" step="0.01" min="0.01" value={form.quantity} onChange={e => setForm({...form, quantity: e.target.value})}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
+              <select value={form.reason} onChange={e => setForm({...form, reason: e.target.value})}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                {defaultReasons.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {isIN && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Unit Cost (GHS) - Optional</label>
+              <input type="number" step="0.01" min="0" value={form.unit_cost} onChange={e => setForm({...form, unit_cost: e.target.value})}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Reference (Receipt, Invoice...)</label>
+            <input type="text" value={form.reference} onChange={e => setForm({...form, reference: e.target.value})}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+            <textarea rows="2" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"></textarea>
+          </div>
+
+          <div className="flex gap-3 pt-4 border-t mt-6">
+            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving} className={`flex-1 px-4 py-2 text-white rounded-lg font-medium transition flex justify-center items-center ${isIN ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'} disabled:opacity-50`}>
+              {saving ? <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" /> : 'Confirm'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 };
 
 // ============================================================
 // HISTORY MODAL
 // ============================================================
 const HistoryModal = ({ item, onClose }) => {
-  // ... (inchangé)
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      const { data, error } = await supabase
+        .from('stock_movements')
+        .select('*')
+        .eq('stock_item_id', item.id)
+        .order('created_at', { ascending: false });
+      
+      if (!error) setHistory(data || []);
+      setLoading(false);
+    };
+    fetchHistory();
+  }, [item.id]);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+        <div className="p-5 border-b flex justify-between items-center bg-gray-50">
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">📋 History: {item.name}</h2>
+            <p className="text-sm text-gray-500 mt-1">Current Total: {item.quantity} {item.unit}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-5">
+          {loading ? (
+            <div className="flex justify-center items-center py-10">
+              <div className="animate-spin h-8 w-8 border-4 border-blue-600 border-t-transparent rounded-full"></div>
+            </div>
+          ) : history.length === 0 ? (
+            <div className="text-center py-10 text-gray-500">
+              <p className="text-3xl mb-2">📭</p>
+              <p>No movements recorded for this item.</p>
+            </div>
+          ) : (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-gray-100 text-gray-600 font-medium">
+                  <tr>
+                    <th className="px-4 py-3">Date</th>
+                    <th className="px-4 py-3 text-center">Type</th>
+                    <th className="px-4 py-3 text-right">Qty</th>
+                    <th className="px-4 py-3">Reason</th>
+                    <th className="px-4 py-3">Reference</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {history.map(m => (
+                    <tr key={m.id} className="hover:bg-gray-50 transition">
+                      <td className="px-4 py-3 text-gray-600">
+                        {new Date(m.created_at).toLocaleDateString('en-GB')}
+                        <span className="text-xs text-gray-400 block">
+                          {new Date(m.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${m.type === 'IN' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {m.type}
+                        </span>
+                      </td>
+                      <td className={`px-4 py-3 text-right font-bold ${m.type === 'IN' ? 'text-green-600' : 'text-red-600'}`}>
+                        {m.type === 'IN' ? '+' : '-'}{m.quantity}
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">{m.reason}</td>
+                      <td className="px-4 py-3 text-gray-500 font-mono text-xs">{m.reference || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 border-t bg-gray-50 flex justify-end">
+          <button onClick={onClose} className="px-6 py-2 text-gray-700 bg-white border border-gray-300 hover:bg-gray-100 rounded-lg font-medium transition">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // ============================================================
@@ -61,10 +381,9 @@ export default function StockPage() {
   const [filterStatus, setFilterStatus] = useState('all');
   const [toast, setToast] = useState(null);
 
-  // Modals
   const [showAddModal, setShowAddModal] = useState(false);
-  const [movementModal, setMovementModal] = useState(null); // { item, type }
-  const [historyModal, setHistoryModal] = useState(null);   // item
+  const [movementModal, setMovementModal] = useState(null);
+  const [historyModal, setHistoryModal] = useState(null);
 
   const showToast = (message, type = 'info') => setToast({ message, type });
 
@@ -75,15 +394,15 @@ export default function StockPage() {
       .select('*')
       .eq('is_active', true)
       .order('name');
-    if (error) { showToast('Erreur chargement: ' + error.message, 'error'); }
+    if (error) { showToast('Error loading: ' + error.message, 'error'); }
     else { setItems(data || []); }
     setLoading(false);
   }, []);
 
   const fetchMovements = useCallback(async () => {
     const { data, error } = await supabase
-      .from('stock_movements')
-      .select(`*, stock_items(name, unit)`)
+      .from('stock_movements_view')
+      .select('*')
       .order('created_at', { ascending: false })
       .limit(200);
     if (!error) setMovements(data || []);
@@ -94,7 +413,6 @@ export default function StockPage() {
     fetchMovements();
   }, [fetchItems, fetchMovements]);
 
-  // ── Client-side Filtering ─────────────
   const filteredItems = items.filter(item => {
     const matchSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (item.supplier || '').toLowerCase().includes(searchTerm.toLowerCase());
@@ -108,16 +426,14 @@ export default function StockPage() {
   });
 
   const filteredMovements = movements.filter(m => {
-    const itemName = m.stock_items?.name || '';
+    const itemName = m.item_name || '';
     return itemName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (m.reference || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (m.reason || '').toLowerCase().includes(searchTerm.toLowerCase());
   });
 
-  // ── Categories from data ─────────────────────────────────
   const categories = [...new Set(items.map(i => i.category).filter(Boolean))].sort();
 
-  // ── Stats ────────────────────────────────────────────────
   const stats = {
     total: items.length,
     outOfStock: items.filter(i => i.quantity <= 0).length,
@@ -125,7 +441,6 @@ export default function StockPage() {
     totalValue: items.reduce((sum, i) => sum + (i.quantity * (i.unit_price || 0)), 0),
   };
 
-  // ── Stock Status Badge ───────────────────────────────────
   const getStatusBadge = (item) => {
     if (item.quantity <= 0)
       return <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full font-semibold">Out of Stock</span>;
@@ -134,15 +449,10 @@ export default function StockPage() {
     return <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-semibold">In Stock</span>;
   };
 
-  // ============================================================
-  // RENDER
-  // ============================================================
   return (
     <div className="p-6 space-y-6">
-      {/* Toast */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
-      {/* Modals */}
       {showAddModal && (
         <AddItemModal
           onClose={() => setShowAddModal(false)}
@@ -164,7 +474,6 @@ export default function StockPage() {
         <HistoryModal item={historyModal} onClose={() => setHistoryModal(null)} />
       )}
 
-      {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">📦 Stock Management</h1>
@@ -178,7 +487,6 @@ export default function StockPage() {
         </CanAct>
       </div>
 
-      {/* ── Stats Cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
           { label: 'Total Items', value: stats.total, icon: '📦', color: 'blue', onClick: () => { setFilterStatus('all'); setActiveTab('inventory'); } },
@@ -200,7 +508,6 @@ export default function StockPage() {
         ))}
       </div>
 
-      {/* ── Tabs ── */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <div className="flex border-b">
           <CanSee module="stock" section="tabs" element="Inventory tab">
@@ -231,7 +538,6 @@ export default function StockPage() {
           </CanSee>
         </div>
 
-        {/* ── Filters Bar ── */}
         <div className="p-4 border-b bg-gray-50 flex flex-wrap gap-3">
           <input
             type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
@@ -256,7 +562,6 @@ export default function StockPage() {
           )}
         </div>
 
-        {/* ── Tab Content ── */}
         {loading ? (
           <div className="p-12 text-center text-gray-400">
             <div className="text-4xl mb-3 animate-pulse">📦</div>
@@ -264,7 +569,6 @@ export default function StockPage() {
           </div>
         ) : (
           <>
-            {/* INVENTORY TAB */}
             {activeTab === 'inventory' && (
               <div className="overflow-x-auto">
                 {filteredItems.length === 0 ? (
@@ -343,7 +647,6 @@ export default function StockPage() {
               </div>
             )}
 
-            {/* LEDGER TAB */}
             {activeTab === 'ledger' && (
               <div className="overflow-x-auto">
                 {filteredMovements.length === 0 ? (
@@ -381,8 +684,8 @@ export default function StockPage() {
                           </td>
                           <td className="px-4 py-3 font-mono text-xs text-blue-600">{m.reference}</td>
                           <td className="px-4 py-3 font-medium text-gray-800">
-                            {m.stock_items?.name || '—'}
-                            <div className="text-xs text-gray-400">{m.stock_items?.unit}</div>
+                            {m.item_name || '—'}
+                            <div className="text-xs text-gray-400">{m.item_unit}</div>
                           </td>
                           <td className="px-4 py-3 text-center">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
