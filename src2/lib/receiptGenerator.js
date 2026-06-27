@@ -351,7 +351,7 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   const gState = new GState({ opacity: 0.45 })
   doc.setGState(gState)
   doc.setFontSize(7)
-  doc.setTextColor(120, 120, 120)
+  doc.setTextColor(90, 90, 90)
   doc.setFont('helvetica', 'normal')
   const leftMargin = 3
   const textStr = 'Powered by EduManage GH  •  +233 59 643 8500'

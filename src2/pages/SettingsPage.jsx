@@ -30,6 +30,8 @@ export default function SettingsPage() {
     email: '',
     logo: '',
     academic_year: '2025/2026',
+    vacation_start_date: '',
+    resumption_date: '', 
   })
   const [savingSchool, setSavingSchool] = useState(false)
 
@@ -71,6 +73,8 @@ export default function SettingsPage() {
       email:       config.email       || '',
       logo:        config.logo        || '',
       academic_year: config.academic_year || '2025/2026',
+        vacation_start_date: config.vacation_start_date || '',
+        resumption_date:     config.resumption_date     || '',
     })
   }
 
@@ -83,6 +87,8 @@ export default function SettingsPage() {
       { key: 'email',       value: schoolSettings.email },
       { key: 'logo',        value: schoolSettings.logo },
       { key: 'academic_year', value: schoolSettings.academic_year },
+      { key: 'vacation_start_date', value: schoolSettings.vacation_start_date },
+      { key: 'resumption_date',     value: schoolSettings.resumption_date     },
     ]
     for (const entry of entries) {
       const { error } = await supabase
@@ -291,6 +297,16 @@ export default function SettingsPage() {
                 <option value="2025/2026">2025/2026</option>
                 <option value="2026/2027">2026/2027</option>
               </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Vacation Start Date</label>
+              <input type="date" value={schoolSettings.vacation_start_date} onChange={e => setSchoolSettings(s => ({ ...s, vacation_start_date: e.target.value }))}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Resumption Date (2026/2027)</label>
+              <input type="date" value={schoolSettings.resumption_date} onChange={e => setSchoolSettings(s => ({ ...s, resumption_date: e.target.value }))}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
             <button onClick={saveSchoolSettings} disabled={savingSchool} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
               {savingSchool ? 'Saving...' : 'Save School Settings'}

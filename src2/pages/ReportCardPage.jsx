@@ -45,7 +45,9 @@ export default function ReportCardPage() {
       address: cfg.address     || '',
       phone:   cfg.phone       || '',
       email:   cfg.email       || '',
-      logo:    cfg.logo        || null,   // ← ajouté
+      logo:    cfg.logo        || null,
+      vacationStart: cfg.vacation_start_date || '',
+      resumption:   cfg.resumption_date     || '',
     });
   };
 
