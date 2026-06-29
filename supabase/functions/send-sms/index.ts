@@ -1,6 +1,6 @@
-// supabase/functions/send-sms/index.ts
 import { serve } from "https://deno.land/std@0.170.0/http/server.ts";
 
+// Les valeurs sont lues depuis les Secrets de la fonction (Settings → Secrets)
 const CLIENT_ID = Deno.env.get("HUBTEL_CLIENT_ID")!;
 const CLIENT_SECRET = Deno.env.get("HUBTEL_CLIENT_SECRET")!;
 const SENDER_ID = Deno.env.get("HUBTEL_SENDER_ID") || "EduManage";
@@ -18,20 +18,17 @@ serve(async (req: Request) => {
   }
 
   try {
-    // Lire le corps de la requête de manière robuste
     const rawBody = await req.text();
     console.log("Raw body:", rawBody);
 
     let phone: string;
     let message: string;
 
-    // Essayer de parser comme JSON
     try {
       const body = JSON.parse(rawBody);
       phone = body.phone;
       message = body.message;
     } catch {
-      // Si ce n'est pas du JSON, essayer de parser comme URLSearchParams (form data)
       const params = new URLSearchParams(rawBody);
       phone = params.get('phone') || '';
       message = params.get('message') || '';
@@ -44,7 +41,7 @@ serve(async (req: Request) => {
       );
     }
 
-    // Conversion du format local (0532000000) vers international (233532000000)
+    // Format international pour Hubtel
     let intlPhone = phone.replace(/[^0-9]/g, "");
     if (intlPhone.startsWith("0")) {
       intlPhone = "233" + intlPhone.slice(1);
@@ -52,7 +49,6 @@ serve(async (req: Request) => {
       intlPhone = "233" + intlPhone;
     }
 
-    // Construction de l'URL avec les paramètres requis par Quick Send
     const params = new URLSearchParams({
       clientid: CLIENT_ID,
       clientsecret: CLIENT_SECRET,

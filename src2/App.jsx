@@ -30,9 +30,12 @@ import GesReportPage from './pages/GesReportPage'
 import Layout from './components/Layout'
 
 function PrivateRoute({ children }) {
-  const { user, loading } = useAuthStore()
+  const { user, loading } = useAuthStore() // ← MODIFICATION : plus de profile
   if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>
-  return user ? children : <Navigate to="/login" />
+  if (!user) return <Navigate to="/login" />
+  // ← MODIFICATION : vérification via user_metadata
+  if (user.user_metadata?.role === 'parent') return <Navigate to="/parent" />
+  return children
 }
 
 export default function App() {

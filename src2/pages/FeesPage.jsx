@@ -519,18 +519,7 @@ export default function FeesPage() {
         const { data: fullPayment } = await supabase.from('fee_payments').select('*, students(first_name, last_name, class_id, parent_phone, classes(name))').eq('id', data.id).single()
 
         if (fullPayment) {
-          // ── IMPRESSION DU REÇU (détail par prestation) ──
-          const feeItemsForReceipt = validLines.map(line => {
-            const feeInfo = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
-            return {
-              description: line.type,
-              amount_due: feeInfo ? feeInfo.annual : 0,
-              amount_paid: parseFloat(line.amount)
-            }
-          })
-          await printReceipt({ ...fullPayment, items: feeItemsForReceipt, collected_by_name: collectorName }, schoolConfig)
-
-          // ── ENVOI DU SMS (non‑bloquant, silencieux en cas d'échec) ──
+          // ── ENVOI DU SMS (en premier, bloquant) ──
           const studentPhone = fullPayment.students?.parent_phone || student?.parent_phone
           if (studentPhone) {
             const totalRemainingBefore = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0)
@@ -542,10 +531,21 @@ export default function FeesPage() {
               actualBalanceAfter.toFixed(2),
               form.term
             )
-            sendSMS(studentPhone, smsMessage).catch(err =>
-              console.error("[SMS] Non‑bloquant – envoi échoué :", err)
+            await sendSMS(studentPhone, smsMessage).catch(err =>
+              console.error("[SMS] Échec avant impression :", err)
             )
           }
+
+          // ── IMPRESSION DU REÇU (après SMS) ──
+          const feeItemsForReceipt = validLines.map(line => {
+            const feeInfo = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
+            return {
+              description: line.type,
+              amount_due: feeInfo ? feeInfo.annual : 0,
+              amount_paid: parseFloat(line.amount)
+            }
+          })
+          await printReceipt({ ...fullPayment, items: feeItemsForReceipt, collected_by_name: collectorName }, schoolConfig)
         }
 
         setMessage('✅ Payment recorded & receipt printed!')

@@ -45,8 +45,6 @@ serve(async (req: Request) => {
 
     // ── ACTION 1 : send-otp ──
     if (action === "send-otp") {
-      // Vérifier que le numéro existe dans students
-      // Vérifier que le numéro existe dans students (blindé pour les fratries)
       const { data: students, error: studentError } = await supabaseAdmin
         .from("students")
         .select("id, first_name, last_name")
@@ -54,14 +52,12 @@ serve(async (req: Request) => {
         .limit(1);
 
       if (studentError) {
-        // ÇA, C'EST POUR TOI : Le log interne dans Supabase reste en français
         console.error("Erreur de base de données lors de la recherche de l'élève :", studentError);
       }
 
       const student = students && students.length > 0 ? students[0] : null;
 
       if (!student) {
-        // ÇA, C'EST POUR LE PARENT : Le message d'erreur qui part vers l'application est en anglais
         return new Response(JSON.stringify({ error: "Phone number not registered." }), {
           status: 404,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -71,21 +67,20 @@ serve(async (req: Request) => {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-      // Invalider les anciens OTP
       await supabaseAdmin
         .from("parent_otp")
         .update({ used: true })
         .eq("phone", cleaned)
         .eq("used", false);
 
-      // Stocker le nouveau
+      // ── MODIFICATION 1 : 'code' → 'otp' ──
       await supabaseAdmin.from("parent_otp").insert({
         phone: cleaned,
-        code: otp,
+        otp: otp,                // <-- ICI : remplacé code par otp
         expires_at: expiresAt,
+        used: false,
       });
 
-      // SMS Quick Send
       const smsParams = new URLSearchParams({
         clientid: HUBTEL_CLIENT_ID,
         clientsecret: HUBTEL_CLIENT_SECRET,
@@ -96,7 +91,6 @@ serve(async (req: Request) => {
 
       await fetch(`${HUBTEL_QUICK_SEND_URL}?${smsParams.toString()}`, { method: "GET" });
 
-      // Vérifier si un compte existe déjà avec cet email fictif
       const { data: existingUser } = await supabaseAdmin.auth.admin.listUsers();
       const found = (existingUser?.users || []).find(u => u.email === fakeEmail);
 
@@ -119,11 +113,12 @@ serve(async (req: Request) => {
         });
       }
 
+      // ── MODIFICATION 2 : 'code' → 'otp' ──
       const { data: otpRecord } = await supabaseAdmin
         .from("parent_otp")
         .select("*")
         .eq("phone", cleaned)
-        .eq("code", code)
+        .eq("otp", code)          // <-- ICI : remplacé code par otp
         .eq("used", false)
         .gt("expires_at", new Date().toISOString())
         .maybeSingle();
@@ -135,7 +130,6 @@ serve(async (req: Request) => {
         });
       }
 
-      // Marquer comme utilisé
       await supabaseAdmin.from("parent_otp").update({ used: true }).eq("id", otpRecord.id);
 
       return new Response(JSON.stringify({ success: true }), {
@@ -144,7 +138,7 @@ serve(async (req: Request) => {
       });
     }
 
-    // ── ACTION 3 : set-password (crée ou met à jour, puis connecte) ──
+    // ── ACTION 3 : set-password ──
     if (action === "set-password") {
       if (!password) {
         return new Response(JSON.stringify({ error: "Missing password" }), {
@@ -153,14 +147,12 @@ serve(async (req: Request) => {
         });
       }
 
-      // 1. Essayer de se connecter directement (utilisateur existant)
       const { data: signInData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
         email: fakeEmail,
         password,
       });
 
       if (!signInError && signInData.user) {
-        // Utilisateur existant, mot de passe correct → tout va bien
         await supabaseAdmin.from("profiles").upsert({
           id: signInData.user.id,
           role: "parent",
@@ -179,7 +171,6 @@ serve(async (req: Request) => {
         });
       }
 
-      // 2. Si la connexion échoue, l'utilisateur n'existe peut-être pas → le créer
       if (signInError?.message?.includes("Invalid login credentials")) {
         const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
           email: fakeEmail,
@@ -189,7 +180,6 @@ serve(async (req: Request) => {
         });
         if (createError) throw createError;
 
-        // Re-connecter avec le compte fraîchement créé
         const { data: freshSignIn, error: freshError } = await supabaseAdmin.auth.signInWithPassword({
           email: fakeEmail,
           password,
@@ -214,7 +204,6 @@ serve(async (req: Request) => {
         });
       }
 
-      // 3. Autre erreur (mot de passe trop faible, etc.)
       throw signInError;
     }
 

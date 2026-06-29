@@ -33,8 +33,7 @@ export const useAuthStore = create((set, get) => ({
       .select('*')
       .eq('id', userId)
       .single()
-
-    set({ user: { id: userId }, profile })
+    set(state => ({ ...state, profile })) // ← MODIFICATION : ne pas écraser user
   },
 
   login: async (email, password) => {
