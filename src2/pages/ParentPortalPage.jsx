@@ -135,19 +135,28 @@ export default function ParentPortalPage() {
   };
 
   const handleLoggedIn = async (currentSession) => {
-    setIsDataLoading(true);
-    setSession(currentSession);
+  setIsDataLoading(true);
+  setSession(currentSession);
+
+  try {
     const parentPhone = currentSession.user.user_metadata?.phone;
 
     if (!parentPhone) {
+      console.warn("Parent phone not found in session metadata.");
       setIsDataLoading(false);
       return;
     }
 
-    const { data: linkedStudents } = await supabase
+    const { data: linkedStudents, error: studentsError } = await supabase
       .from('students')
       .select('id, first_name, last_name, class_id, parent_name, classes(name)')
       .eq('parent_phone', parentPhone);
+
+    if (studentsError) {
+      console.error("Error fetching linked students:", studentsError);
+      setIsDataLoading(false);
+      return;
+    }
 
     if (linkedStudents && linkedStudents.length > 0) {
       setAllStudents(linkedStudents);
@@ -155,11 +164,17 @@ export default function ParentPortalPage() {
       setStudent(first);
       setSelectedStudentId(first.id);
       setParentName(first.parent_name || 'Parent');
-      loadStudentData(first.id);
-      loadSharedData(first.id);
+      await loadStudentData(first.id);
+      await loadSharedData(first.id);
+    } else {
+      console.warn("No linked students found for phone:", parentPhone);
     }
+  } catch (err) {
+    console.error("Error loading parent portal data:", err);
+  } finally {
     setIsDataLoading(false);
-  };
+  }
+};
 
   const handleSelectStudent = async (id) => {
     const s = allStudents.find(x => x.id === id);

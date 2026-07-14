@@ -35,11 +35,21 @@ export default function GradeEntryPage() {
   const [caScores, setCaScores] = useState({});
   const [caMessage, setCaMessage] = useState('');
 
+  // ── CHARGEMENT DES TERMES ──
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
-    supabase.from('classes').select('id, name').order('sort_order')
-      .then(({ data }) => setClasses(data || []));
+  }, []);
+
+  // ── CHARGEMENT DES CLASSES (FILTRÉES PRIMARY / JHS) ──
+  useEffect(() => {
+    supabase.from('classes').select('id, name, level').order('sort_order')
+      .then(({ data }) => {
+        const filtered = (data || []).filter(c => 
+          c.name && (c.name.includes('Primary') || c.name.includes('JHS'))
+        );
+        setClasses(filtered);
+      });
   }, []);
 
   useEffect(() => {

@@ -10,13 +10,16 @@ export const useAuthStore = create((set, get) => ({
   initialize: async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
+      
       if (session?.user) {
+        set({ user: session.user }) // ← CORRECTION : sauvegarde du user
         await get().fetchProfile(session.user.id)
       }
       set({ loading: false })
 
       supabase.auth.onAuthStateChange(async (event, session) => {
         if (session?.user) {
+          set({ user: session.user }) // ← CORRECTION : sauvegarde au changement
           await get().fetchProfile(session.user.id)
         } else {
           set({ user: null, profile: null })
@@ -28,12 +31,18 @@ export const useAuthStore = create((set, get) => ({
   },
 
   fetchProfile: async (userId) => {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    set(state => ({ ...state, profile })) // ← MODIFICATION : ne pas écraser user
+    try {
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      if (!error && profile) {
+        set(state => ({ ...state, profile }))
+      }
+    } catch (err) {
+      console.error("Erreur de chargement du profil:", err)
+    }
   },
 
   login: async (email, password) => {

@@ -3,17 +3,8 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { computeTermReport } from '../lib/gradeCalculations';
 import { generateReportCard } from '../lib/reportCardGenerator';
-import { generateKgReportCard } from '../lib/kgReportCardGenerator';
 import { Printer } from 'lucide-react';
 import { CanAct, CanSee } from '../components/PermissionGate';
-
-const RUBRIC_LABELS = { 'E': 'Emerging', 'D': 'Developing', 'A': 'Achieving', 'Ex': 'Extending' };
-const RUBRIC_COLORS = {
-  'E': 'bg-red-100 text-red-700',
-  'D': 'bg-yellow-100 text-yellow-700',
-  'A': 'bg-blue-100 text-blue-700',
-  'Ex': 'bg-green-100 text-green-700',
-};
 
 export default function ReportCardPage() {
   const [terms, setTerms] = useState([]);
@@ -26,13 +17,22 @@ export default function ReportCardPage() {
   const [loading, setLoading] = useState(false);
   const [school, setSchool] = useState({ name: '', address: '', phone: '' });
 
-  const [kgPreview, setKgPreview] = useState(null);
-
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
-    supabase.from('classes').select('id, name').order('sort_order')
-      .then(({ data }) => setClasses(data || []));
+      
+    // ── CHARGEMENT DES CLASSES AVEC LOGS ──
+    supabase.from('classes').select('id, name, level').order('sort_order', { ascending: true })
+      .then(({ data }) => {
+        console.log('🔍 Données brutes des classes :', data);
+        // Filtrage par nom (Primary ou JHS)
+        const primaryJhsClasses = (data || []).filter(c => 
+          c.name && (c.name.includes('Primary') || c.name.includes('JHS'))
+        );
+        console.log('🔍 Classes filtrées (Primary/JHS) :', primaryJhsClasses);
+        setClasses(primaryJhsClasses);
+      });
+      
     loadSchoolInfo();
   }, []);
 
@@ -52,68 +52,32 @@ export default function ReportCardPage() {
   };
 
   useEffect(() => {
-    if (selectedClass) {
-      supabase.from('students').select('id, first_name, last_name').eq('class_id', selectedClass).order('last_name')
-        .then(({ data }) => setStudents(data || []));
-    }
+    const fetchStudents = async () => {
+      if (!selectedClass) {
+        setStudents([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from('students')
+        .select('id, first_name, last_name')
+        .eq('class_id', selectedClass)
+        .order('last_name');
+
+      if (error) {
+        console.error("🚨 Erreur Supabase (Étudiants) :", error.message);
+        return;
+      }
+      setStudents(data || []);
+    };
+    fetchStudents();
   }, [selectedClass]);
-
-  const isKgClass = () => {
-    const cls = classes.find(c => c.id === selectedClass);
-    return cls?.level === 'KG';
-  };
-
-  const loadKgPreview = async (studentId, termId) => {
-    const { data: student } = await supabase
-      .from('students')
-      .select('first_name, last_name, date_of_birth')
-      .eq('id', studentId)
-      .maybeSingle();
-
-    const { data: assessments } = await supabase
-      .from('kg_assessments')
-      .select('domain, rubric')
-      .eq('student_id', studentId)
-      .eq('term_id', termId);
-
-    const { data: termData } = await supabase
-      .from('academic_terms')
-      .select('start_date, end_date')
-      .eq('id', termId)
-      .maybeSingle();
-
-    let attendance = { present: 0, absent: 0, late: 0, excused: 0, total: 0 };
-    if (termData) {
-      const { data: atts } = await supabase
-        .from('attendance')
-        .select('status')
-        .eq('student_id', studentId)
-        .gte('date', termData.start_date)
-        .lte('date', termData.end_date);
-      (atts || []).forEach(a => {
-        attendance.total++;
-        if (a.status === 'P') attendance.present++;
-        else if (a.status === 'A') attendance.absent++;
-        else if (a.status === 'L') attendance.late++;
-        else if (a.status === 'E') attendance.excused++;
-      });
-    }
-
-    setKgPreview({ student, assessments: assessments || [], attendance });
-  };
 
   const handleCompute = async () => {
     if (!selectedStudent || !selectedTerm) return;
     setLoading(true);
-    setKgPreview(null);
     setReport(null);
-
-    if (isKgClass()) {
-      await loadKgPreview(selectedStudent, selectedTerm);
-    } else {
-      const rep = await computeTermReport(selectedStudent, selectedTerm);
-      setReport(rep);
-    }
+    const rep = await computeTermReport(selectedStudent, selectedTerm);
+    setReport(rep);
     setLoading(false);
   };
 
@@ -122,41 +86,31 @@ export default function ReportCardPage() {
     const term = terms.find(t => t.id === selectedTerm);
     if (!term) return;
 
-    if (isKgClass()) {
-      const className = classes.find(c => c.id === selectedClass)?.name || '';
-      await generateKgReportCard({
-        studentId: selectedStudent,
-        termId: selectedTerm,
-        className,
-        school,
-      });
-    } else {
-      const { data: fullStudent } = await supabase
-        .from('students')
-        .select('first_name, last_name, date_of_birth')
-        .eq('id', selectedStudent)
-        .maybeSingle();
+    const { data: fullStudent } = await supabase
+      .from('students')
+      .select('first_name, last_name, date_of_birth')
+      .eq('id', selectedStudent)
+      .maybeSingle();
 
-      const rep = await computeTermReport(selectedStudent, selectedTerm);
+    const rep = await computeTermReport(selectedStudent, selectedTerm);
 
-      generateReportCard({
-        student: {
-          first_name: fullStudent?.first_name || '—',
-          last_name:  fullStudent?.last_name  || '—',
-          class:      classes.find(c => c.id === selectedClass)?.name || '',
-          date_of_birth: fullStudent?.date_of_birth || '',
-        },
-        report: rep,
-        term,
-        school,
-      });
-    }
+    generateReportCard({
+      student: {
+        first_name: fullStudent?.first_name || '—',
+        last_name:  fullStudent?.last_name  || '—',
+        class:      classes.find(c => c.id === selectedClass)?.name || '',
+        date_of_birth: fullStudent?.date_of_birth || '',
+      },
+      report: rep,
+      term,
+      school,
+    });
   };
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Terminal Reports</h1>
-      <p className="text-gray-500 text-sm -mt-4">Compute term averages and generate terminal reports</p>
+      <h1 className="text-2xl font-bold text-gray-900">Primary / JHS Reports</h1>
+      <p className="text-gray-500 text-sm -mt-4">Compute term averages and generate terminal reports for Primary and JHS</p>
 
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
         <CanSee module="report-cards" section="header" element="Term select">
@@ -198,57 +152,7 @@ export default function ReportCardPage() {
 
       {loading && <div className="text-center py-4 text-gray-500">Computing...</div>}
 
-      {/* Prévisualisation KG */}
-      {kgPreview && (
-        <div className="bg-white rounded-xl shadow overflow-hidden">
-          <div className="px-6 py-4 border-b bg-blue-50">
-            <h2 className="font-semibold text-lg">
-              {kgPreview.student?.last_name} {kgPreview.student?.first_name}
-            </h2>
-            <p className="text-xs text-gray-500">
-              Class: {classes.find(c => c.id === selectedClass)?.name || ''} · Term: {terms.find(t => t.id === selectedTerm)?.name || ''}
-            </p>
-          </div>
-          <div className="p-4">
-            <h3 className="font-medium text-gray-700 mb-2">Learning Domains</h3>
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  <th className="text-left px-4 py-2">Domain</th>
-                  <th className="text-center px-4 py-2">Level</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {kgPreview.assessments.map((a, idx) => (
-                  <tr key={idx} className="hover:bg-gray-50">
-                    <td className="px-4 py-2">{a.domain}</td>
-                    <td className="px-4 py-2 text-center">
-                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${RUBRIC_COLORS[a.rubric] || 'bg-gray-100'}`}>
-                        {RUBRIC_LABELS[a.rubric] || a.rubric}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {kgPreview.assessments.length === 0 && (
-                  <tr><td colSpan={2} className="text-center py-4 text-gray-400">No assessments recorded for this term.</td></tr>
-                )}
-              </tbody>
-            </table>
-            <h3 className="font-medium text-gray-700 mt-6 mb-2">Attendance</h3>
-            <div className="grid grid-cols-3 md:grid-cols-6 gap-3 text-sm">
-              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Present</span><span className="font-bold">{kgPreview.attendance.present}</span></div>
-              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Absent</span><span className="font-bold">{kgPreview.attendance.absent}</span></div>
-              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Late</span><span className="font-bold">{kgPreview.attendance.late}</span></div>
-              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Excused</span><span className="font-bold">{kgPreview.attendance.excused}</span></div>
-              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Total</span><span className="font-bold">{kgPreview.attendance.total}</span></div>
-              <div className="bg-gray-50 rounded p-2 text-center"><span className="block text-xs text-gray-500">Rate</span><span className="font-bold">{kgPreview.attendance.total > 0 ? ((kgPreview.attendance.present / kgPreview.attendance.total) * 100).toFixed(1) + '%' : 'N/A'}</span></div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Prévisualisation Primary/JHS */}
-      {report && !isKgClass() && (
+      {report && (
         <CanSee module="report-cards" section="preview" element="Grades table">
           <div className="bg-white rounded-xl shadow overflow-hidden">
             <div className="px-6 py-4 border-b flex justify-between items-center">
@@ -260,8 +164,17 @@ export default function ReportCardPage() {
               <thead className="bg-gray-50 border-b">
                 <tr>
                   <th className="text-left px-4 py-3">SUBJECT</th>
-                  <th className="text-center px-4 py-3">S.B.A (50)</th>
-                  <th className="text-center px-4 py-3">EXAM (50)</th>
+                  {classes.find(c => c.id === selectedClass)?.level === 'JHS' ? (
+                    <>
+                      <th className="text-center px-4 py-3">CLASS (30)</th>
+                      <th className="text-center px-4 py-3">EXAM (70)</th>
+                    </>
+                  ) : (
+                    <>
+                      <th className="text-center px-4 py-3">S.B.A (50)</th>
+                      <th className="text-center px-4 py-3">EXAM (50)</th>
+                    </>
+                  )}
                   <th className="text-center px-4 py-3">TOTAL (100)</th>
                   <th className="text-center px-4 py-3">GRADE</th>
                   <th className="text-center px-4 py-3">POS</th>
@@ -296,15 +209,6 @@ export default function ReportCardPage() {
                   <td colSpan={3} className="px-4 py-2 text-right">Position (all subjects)</td>
                   <td className="px-4 py-2 text-center">{report.rank ?? '—'}</td>
                   <td colSpan={3}></td>
-                </tr>
-                <tr>
-                  <td colSpan={7} className="px-4 py-2">
-                    <p><strong>A = ADVANCED</strong> &nbsp; P = PROFICIENT &nbsp; AP = APPROACHING PROFICIENCY &nbsp; D = DEVELOPING &nbsp; B = BEGINNING</p>
-                    <p className="mt-2"><strong>Class teachers' remarks:</strong></p>
-                    <p className="italic">(aucune remarque inscrite)</p>
-                    <p className="mt-2"><strong>Signature/stamp</strong></p>
-                    <p className="mt-2"><strong>School Director</strong></p>
-                  </td>
                 </tr>
               </tfoot>
             </table>
