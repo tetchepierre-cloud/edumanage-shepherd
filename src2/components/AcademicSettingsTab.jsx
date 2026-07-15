@@ -28,12 +28,11 @@ export default function AcademicSettingsTab() {
     academic_year: '2025/2026',
   });
 
-  // ─── NOUVEAU : Termes & Séquences ───────────────────────
+  // Termes & Séquences
   const [selectedYear, setSelectedYear] = useState('2025/2026');
   const [terms, setTerms] = useState([]);
   const [newTerm, setNewTerm] = useState({ name: '', term_number: 1, start_date: '', end_date: '' });
   const [showAddTerm, setShowAddTerm] = useState(false);
-
   const [termsLoaded, setTermsLoaded] = useState(false);
 
   useEffect(() => { fetchData(); }, []);
@@ -42,14 +41,31 @@ export default function AcademicSettingsTab() {
     setLoading(true);
     const [subRes, clsRes, stfRes, csRes] = await Promise.all([
       supabase.from('subjects').select('*').order('cycle').order('order_index'),
-      supabase.from('classes').select('id, name').order('name'),
+      // ── MODIFICATION : récupérer levels.sort_order pour trier ──
+      supabase.from('classes')
+        .select('id, name, level_id, levels(sort_order)')
+        .order('name'),
       supabase.from('staff').select('id, first_name, last_name').eq('active', true).order('last_name'),
-      supabase.from('class_subjects').select('id, class_id, subject_id, teacher_id, coefficient, academic_year, classes(name), subjects(name, cycle), staff(first_name, last_name)').order('academic_year', { ascending: false }),
+      supabase.from('class_subjects')
+        .select('id, class_id, subject_id, teacher_id, coefficient, academic_year, classes(name, level_id, levels(sort_order)), subjects(name, cycle), staff(first_name, last_name)')
+        .order('academic_year', { ascending: false }),
     ]);
+
+    // ── TRI : par niveau (sort_order) → puis classe → puis matière ──
+    const sortedAssignments = (csRes.data || []).sort((a, b) => {
+      const orderA = a.classes?.levels?.sort_order ?? 999;
+      const orderB = b.classes?.levels?.sort_order ?? 999;
+      if (orderA !== orderB) return orderA - orderB;
+      const classNameA = a.classes?.name || '';
+      const classNameB = b.classes?.name || '';
+      if (classNameA !== classNameB) return classNameA.localeCompare(classNameB);
+      return (a.subjects?.name || '').localeCompare(b.subjects?.name || '');
+    });
+
     setSubjects(subRes.data || []);
     setClasses(clsRes.data || []);
     setStaff(stfRes.data || []);
-    setClassSubjects(csRes.data || []);
+    setClassSubjects(sortedAssignments);
     setLoading(false);
   };
 
@@ -96,7 +112,6 @@ export default function AcademicSettingsTab() {
   };
 
   const addSequence = async (termId) => {
-    // Valeurs par défaut
     const defaultMid = { term_id: termId, name: 'School-Based Assessment (SBA)', sequence_type: 'midterm', weight_percent: 50 };
     const defaultEnd = { term_id: termId, name: 'End-Term Exam', sequence_type: 'endterm', weight_percent: 50 };
     const { error } = await supabase.from('assessment_sequences').insert([defaultMid, defaultEnd]);
@@ -363,7 +378,7 @@ export default function AcademicSettingsTab() {
         )}
       </div>
 
-      {/* ═══ NOUVEAU : GESTION DES TERMES & SÉQUENCES ═══ */}
+      {/* ═══ GESTION DES TERMES & SÉQUENCES ═══ */}
       <div className="bg-white rounded-xl border p-6">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-lg font-semibold text-gray-800">Academic Terms & Assessment Sequences</h3>
@@ -398,7 +413,6 @@ export default function AcademicSettingsTab() {
                   </div>
                 </div>
 
-                {/* Séquences de ce terme */}
                 {term.assessment_sequences && term.assessment_sequences.length > 0 ? (
                   <table className="w-full text-xs mt-2">
                     <thead>

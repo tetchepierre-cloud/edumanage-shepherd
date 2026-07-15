@@ -67,6 +67,12 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
   doc.setLineWidth(0.6);
   doc.rect(6, 6, pageW - 12, pageH - 12);
 
+  // ── FILIGRANE (page 1) ──
+  doc.setFontSize(5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...colors.muted);
+  doc.text('Powered by EduManage GH  |  +233 59 643 8500', 9, pageH - 20, { angle: 90 });
+
   let y = 8;
   const logoSize = 27;
   const boxSize = 27;
@@ -283,6 +289,12 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
   doc.setDrawColor(...colors.gold);
   doc.setLineWidth(0.6);
   doc.rect(6, 6, pageW - 12, pageH - 12);
+
+  // ── FILIGRANE (page 2) ──
+  doc.setFontSize(5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...colors.muted);
+  doc.text('Powered by EduManage GH  |  +233 59 643 8500', 9, pageH - 20, { angle: 90 });
 
   currentY = 14;
 
