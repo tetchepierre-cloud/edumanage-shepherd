@@ -181,7 +181,7 @@ export default function Layout() {
         <div className="p-4 border-t border-blue-800">
           {sidebarOpen && profile && (
             <div className="mb-3">
-              <p className="text-sm font-medium">{profile.full_name || profile.first_name} {profile.last_name}</p>
+              <p className="text-sm font-medium">{profile.full_name || `${profile.first_name} ${profile.last_name}`}</p>
               <p className="text-xs text-blue-300">{profile.role}</p>
             </div>
           )}
