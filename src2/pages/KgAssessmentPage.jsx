@@ -40,9 +40,12 @@ export default function KgAssessmentPage() {
   // ── Mode de saisie : 'assessment' ou 'exam' ──
   const [viewMode, setViewMode] = useState('assessment');
   const [subjects, setSubjects] = useState([]);
-  const [examResults, setExamResults] = useState({}); // { subject_id: { mid_term, class_work, home_work, end_term } }
+  const [examResults, setExamResults] = useState({}); // { subject_id: { ... } }
   const [savingExam, setSavingExam] = useState(false);
   const [examMessage, setExamMessage] = useState('');
+
+  // ── Mode d'examen : 'simple' (2 notes) ou 'detailed' (4 notes) ──
+  const [examMode, setExamMode] = useState('detailed');
 
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
@@ -70,6 +73,8 @@ export default function KgAssessmentPage() {
       vacationStart: cfg.vacation_start_date || '',
       resumption: cfg.resumption_date || ''
     });
+    // Lire le mode KG
+    setExamMode(cfg.kg_exam_mode === 'simple' ? 'simple' : 'detailed');
   };
 
   useEffect(() => {
@@ -112,31 +117,41 @@ export default function KgAssessmentPage() {
       });
   }, [selectedStudent, selectedTerm]);
 
-  // ── Chargement des résultats d'examen (colonnes brutes uniquement) ──
+  // ── Chargement des résultats d'examen selon le mode ──
   useEffect(() => {
     if (!selectedStudent || !selectedTerm || !selectedClass) {
       setExamResults({});
       return;
     }
+    const fields = examMode === 'simple'
+      ? 'subject_id, class_score_raw, exam_score_raw'
+      : 'subject_id, mid_term_raw, class_work_raw, home_work_raw, end_term_raw';
     supabase
       .from('kg_exam_results')
-      .select('subject_id, mid_term_raw, class_work_raw, home_work_raw, end_term_raw')
+      .select(fields)
       .eq('student_id', selectedStudent.id)
       .eq('term_id', selectedTerm)
       .eq('class_id', selectedClass)
       .then(({ data }) => {
         const map = {};
         (data || []).forEach(r => {
-          map[r.subject_id] = {
-            mid_term: r.mid_term_raw ?? '',
-            class_work: r.class_work_raw ?? '',
-            home_work: r.home_work_raw ?? '',
-            end_term: r.end_term_raw ?? ''
-          };
+          if (examMode === 'simple') {
+            map[r.subject_id] = {
+              class_score_raw: r.class_score_raw ?? '',
+              exam_score_raw: r.exam_score_raw ?? ''
+            };
+          } else {
+            map[r.subject_id] = {
+              mid_term: r.mid_term_raw ?? '',
+              class_work: r.class_work_raw ?? '',
+              home_work: r.home_work_raw ?? '',
+              end_term: r.end_term_raw ?? ''
+            };
+          }
         });
         setExamResults(map);
       });
-  }, [selectedStudent, selectedTerm, selectedClass]);
+  }, [selectedStudent, selectedTerm, selectedClass, examMode]);
 
   const handleRubricChange = (criteriaItem, rubricValue) => {
     setAssessments(prev => ({ ...prev, [criteriaItem]: rubricValue }));
@@ -193,23 +208,34 @@ export default function KgAssessmentPage() {
     }));
   };
 
-  // ── Calcul automatique des scores ──
+  // ── Calcul automatique des scores selon le mode ──
   const computeScores = (row) => {
     if (!row) return { classScore: null, examScore: null, total: null };
-    const mt = parseFloat(row.mid_term) || 0;
-    const cw = parseFloat(row.class_work) || 0;
-    const hw = parseFloat(row.home_work) || 0;
-    const et = parseFloat(row.end_term) || 0;
-
-    const classScore = (mt / 100) * 20 + (cw / 5) * 5 + (hw / 5) * 5;
-    const examScore = (et / 100) * 70;
-    const total = classScore + examScore;
-
-    return {
-      classScore: parseFloat(classScore.toFixed(2)),
-      examScore: parseFloat(examScore.toFixed(2)),
-      total: parseFloat(total.toFixed(2))
-    };
+    if (examMode === 'simple') {
+      const cs = parseFloat(row.class_score_raw) || 0;
+      const es = parseFloat(row.exam_score_raw) || 0;
+      const classScore = cs; // déjà sur 30
+      const examScore = es * 0.7; // sur 70
+      const total = classScore + examScore;
+      return {
+        classScore: parseFloat(classScore.toFixed(2)),
+        examScore: parseFloat(examScore.toFixed(2)),
+        total: parseFloat(total.toFixed(2))
+      };
+    } else {
+      const mt = parseFloat(row.mid_term) || 0;
+      const cw = parseFloat(row.class_work) || 0;
+      const hw = parseFloat(row.home_work) || 0;
+      const et = parseFloat(row.end_term) || 0;
+      const classScore = (mt / 100) * 20 + (cw / 5) * 5 + (hw / 5) * 5;
+      const examScore = (et / 100) * 70;
+      const total = classScore + examScore;
+      return {
+        classScore: parseFloat(classScore.toFixed(2)),
+        examScore: parseFloat(examScore.toFixed(2)),
+        total: parseFloat(total.toFixed(2))
+      };
+    }
   };
 
   // ── Barème GES pour Preschool ──
@@ -223,7 +249,7 @@ export default function KgAssessmentPage() {
     return { grade: 'B', remark: 'Beginner' };
   };
 
-  // ── Sauvegarde des résultats d'examen ──
+  // ── Sauvegarde des résultats d'examen selon le mode ──
   const handleSaveExam = async () => {
     if (!selectedTerm || !selectedClass || !selectedStudent) return;
 
@@ -233,38 +259,63 @@ export default function KgAssessmentPage() {
     const payload = subjects
       .filter(s => {
         const row = examResults[s.id];
-        return row && (
-          row.mid_term !== '' ||
-          row.class_work !== '' ||
-          row.home_work !== '' ||
-          row.end_term !== ''
-        );
+        if (!row) return false;
+        if (examMode === 'simple') {
+          return row.class_score_raw !== '' || row.exam_score_raw !== '';
+        } else {
+          return row.mid_term !== '' || row.class_work !== '' || row.home_work !== '' || row.end_term !== '';
+        }
       })
       .map(s => {
         const row = examResults[s.id];
-        const mt = parseFloat(row.mid_term) || 0;
-        const cw = parseFloat(row.class_work) || 0;
-        const hw = parseFloat(row.home_work) || 0;
-        const et = parseFloat(row.end_term) || 0;
-
-        const classScore = (mt / 100) * 20 + (cw / 5) * 5 + (hw / 5) * 5;
-        const examScore = (et / 100) * 70;
-        const total = classScore + examScore;
-
-        return {
-          student_id: selectedStudent.id,
-          class_id: selectedClass,
-          term_id: selectedTerm,
-          subject_id: s.id,
-          mid_term_raw: mt,
-          class_work_raw: cw,
-          home_work_raw: hw,
-          end_term_raw: et,
-          class_score: parseFloat(classScore.toFixed(2)),
-          exam_score: parseFloat(examScore.toFixed(2)),
-          total: parseFloat(total.toFixed(2)),
-          remarks: null
-        };
+        let classScore, examScore, total;
+        if (examMode === 'simple') {
+          const cs = parseFloat(row.class_score_raw) || 0;
+          const es = parseFloat(row.exam_score_raw) || 0;
+          classScore = cs;
+          examScore = es * 0.7;
+          total = classScore + examScore;
+          return {
+            student_id: selectedStudent.id,
+            class_id: selectedClass,
+            term_id: selectedTerm,
+            subject_id: s.id,
+            class_score_raw: cs,
+            exam_score_raw: es,
+            mid_term_raw: 0,
+            class_work_raw: 0,
+            home_work_raw: 0,
+            end_term_raw: 0,
+            class_score: parseFloat(classScore.toFixed(2)),
+            exam_score: parseFloat(examScore.toFixed(2)),
+            total: parseFloat(total.toFixed(2)),
+            remarks: null
+          };
+        } else {
+          const mt = parseFloat(row.mid_term) || 0;
+          const cw = parseFloat(row.class_work) || 0;
+          const hw = parseFloat(row.home_work) || 0;
+          const et = parseFloat(row.end_term) || 0;
+          classScore = (mt / 100) * 20 + (cw / 5) * 5 + (hw / 5) * 5;
+          examScore = (et / 100) * 70;
+          total = classScore + examScore;
+          return {
+            student_id: selectedStudent.id,
+            class_id: selectedClass,
+            term_id: selectedTerm,
+            subject_id: s.id,
+            mid_term_raw: mt,
+            class_work_raw: cw,
+            home_work_raw: hw,
+            end_term_raw: et,
+            class_score_raw: 0,
+            exam_score_raw: 0,
+            class_score: parseFloat(classScore.toFixed(2)),
+            exam_score: parseFloat(examScore.toFixed(2)),
+            total: parseFloat(total.toFixed(2)),
+            remarks: null
+          };
+        }
       });
 
     if (payload.length === 0) {
@@ -311,7 +362,7 @@ export default function KgAssessmentPage() {
     // ── Récupérer les résultats d'examen ──
     const { data: examRows } = await supabase
       .from('kg_exam_results')
-      .select('class_score, exam_score, total, subjects ( name )')
+      .select('class_score, exam_score, total, class_score_raw, exam_score_raw, subjects ( name )')
       .eq('student_id', selectedStudent.id)
       .eq('term_id', selectedTerm)
       .eq('class_id', selectedClass);
@@ -339,7 +390,6 @@ export default function KgAssessmentPage() {
         .eq('term_id', selectedTerm)
         .not('total', 'is', null);
       if (!rankError && classResults) {
-        // Grouper par student_id et calculer la moyenne des totaux
         const studentTotals = {};
         const studentCount = {};
         classResults.forEach(r => {
@@ -371,7 +421,9 @@ export default function KgAssessmentPage() {
         examScore: r.exam_score ?? '—',
         total: total,
         grade: gradeInfo ? gradeInfo.grade : '',
-        remark: gradeInfo ? gradeInfo.remark : ''
+        remark: gradeInfo ? gradeInfo.remark : '',
+        classScoreRaw: r.class_score_raw ?? null,
+        examScoreRaw: r.exam_score_raw ?? null
       };
     });
 
@@ -394,7 +446,8 @@ export default function KgAssessmentPage() {
       totalAllSubjects: totalAllSubjects,
       overallAverage: overallAverage,
       rank: rank || '—',
-      numberOnRoll: numberOnRoll || 0
+      numberOnRoll: numberOnRoll || 0,
+      examMode: examMode  // On passe le mode pour le générateur
     };
 
     KG_CRITERIA.forEach(group => {
@@ -560,7 +613,9 @@ export default function KgAssessmentPage() {
                       <div className="mb-4">
                         <h3 className="font-semibold text-gray-700">End of Term Examination Results</h3>
                         <p className="text-xs text-gray-500 mt-0.5">
-                          Mid Term (out of 100) → 20% · Class Work (out of 5) → 5% · Home Work (out of 5) → 5% · End Term (out of 100) → 70%
+                          {examMode === 'simple'
+                            ? 'Class Score (out of 30) → 30% · Exam Score (out of 100) → 70%'
+                            : 'Mid Term (out of 100) → 20% · Class Work (out of 5) → 5% · Home Work (out of 5) → 5% · End Term (out of 100) → 70%'}
                         </p>
                       </div>
                       <div className="border rounded-lg overflow-x-auto">
@@ -568,10 +623,19 @@ export default function KgAssessmentPage() {
                           <thead className="bg-gray-50 text-xs text-gray-500 border-b">
                             <tr>
                               <th className="text-left px-4 py-2 min-w-[120px]">Subject</th>
-                              <th className="text-center px-2 py-2 w-20">Mid Term (100)</th>
-                              <th className="text-center px-2 py-2 w-20">Class Work (5)</th>
-                              <th className="text-center px-2 py-2 w-20">Home Work (5)</th>
-                              <th className="text-center px-2 py-2 w-20">End Term (100)</th>
+                              {examMode === 'simple' ? (
+                                <>
+                                  <th className="text-center px-2 py-2 w-20">Class (30)</th>
+                                  <th className="text-center px-2 py-2 w-20">Exam (100)</th>
+                                </>
+                              ) : (
+                                <>
+                                  <th className="text-center px-2 py-2 w-20">Mid Term (100)</th>
+                                  <th className="text-center px-2 py-2 w-20">Class Work (5)</th>
+                                  <th className="text-center px-2 py-2 w-20">Home Work (5)</th>
+                                  <th className="text-center px-2 py-2 w-20">End Term (100)</th>
+                                </>
+                              )}
                               <th className="text-center px-2 py-2 w-16">Class (30)</th>
                               <th className="text-center px-2 py-2 w-16">Exam (70)</th>
                               <th className="text-center px-2 py-2 w-16">Total (100)</th>
@@ -581,8 +645,23 @@ export default function KgAssessmentPage() {
                           </thead>
                           <tbody className="divide-y divide-gray-100">
                             {subjects.map(s => {
-                              const row = examResults[s.id] || { mid_term: '', class_work: '', home_work: '', end_term: '' };
-                              const { classScore, examScore, total } = computeScores(row);
+                              const row = examResults[s.id] || {};
+                              // Construire un objet row pour computeScores
+                              let rowForCompute;
+                              if (examMode === 'simple') {
+                                rowForCompute = {
+                                  class_score_raw: row.class_score_raw ?? '',
+                                  exam_score_raw: row.exam_score_raw ?? ''
+                                };
+                              } else {
+                                rowForCompute = {
+                                  mid_term: row.mid_term ?? '',
+                                  class_work: row.class_work ?? '',
+                                  home_work: row.home_work ?? '',
+                                  end_term: row.end_term ?? ''
+                                };
+                              }
+                              const { classScore, examScore, total } = computeScores(rowForCompute);
                               const classScoreDisplay = (classScore !== null && !isNaN(classScore)) ? classScore.toFixed(1) : '—';
                               const examScoreDisplay = (examScore !== null && !isNaN(examScore)) ? examScore.toFixed(1) : '—';
                               const totalDisplay = (total !== null && !isNaN(total)) ? total.toFixed(1) : '—';
@@ -590,50 +669,79 @@ export default function KgAssessmentPage() {
                               return (
                                 <tr key={s.id} className="hover:bg-blue-50/50">
                                   <td className="px-4 py-2 text-gray-700 font-medium">{s.name}</td>
-                                  <td className="px-2 py-2 text-center">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="100"
-                                      step="0.5"
-                                      value={row.mid_term}
-                                      onChange={e => handleExamFieldChange(s.id, 'mid_term', e.target.value)}
-                                      className="w-16 border rounded px-1 py-1 text-center text-sm"
-                                    />
-                                  </td>
-                                  <td className="px-2 py-2 text-center">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="5"
-                                      step="0.5"
-                                      value={row.class_work}
-                                      onChange={e => handleExamFieldChange(s.id, 'class_work', e.target.value)}
-                                      className="w-14 border rounded px-1 py-1 text-center text-sm"
-                                    />
-                                  </td>
-                                  <td className="px-2 py-2 text-center">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="5"
-                                      step="0.5"
-                                      value={row.home_work}
-                                      onChange={e => handleExamFieldChange(s.id, 'home_work', e.target.value)}
-                                      className="w-14 border rounded px-1 py-1 text-center text-sm"
-                                    />
-                                  </td>
-                                  <td className="px-2 py-2 text-center">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="100"
-                                      step="0.5"
-                                      value={row.end_term}
-                                      onChange={e => handleExamFieldChange(s.id, 'end_term', e.target.value)}
-                                      className="w-16 border rounded px-1 py-1 text-center text-sm"
-                                    />
-                                  </td>
+                                  {examMode === 'simple' ? (
+                                    <>
+                                      <td className="px-2 py-2 text-center">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="30"
+                                          step="0.5"
+                                          value={row.class_score_raw ?? ''}
+                                          onChange={e => handleExamFieldChange(s.id, 'class_score_raw', e.target.value)}
+                                          className="w-16 border rounded px-1 py-1 text-center text-sm"
+                                        />
+                                      </td>
+                                      <td className="px-2 py-2 text-center">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          step="0.5"
+                                          value={row.exam_score_raw ?? ''}
+                                          onChange={e => handleExamFieldChange(s.id, 'exam_score_raw', e.target.value)}
+                                          className="w-16 border rounded px-1 py-1 text-center text-sm"
+                                        />
+                                      </td>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <td className="px-2 py-2 text-center">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          step="0.5"
+                                          value={row.mid_term ?? ''}
+                                          onChange={e => handleExamFieldChange(s.id, 'mid_term', e.target.value)}
+                                          className="w-16 border rounded px-1 py-1 text-center text-sm"
+                                        />
+                                      </td>
+                                      <td className="px-2 py-2 text-center">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="5"
+                                          step="0.5"
+                                          value={row.class_work ?? ''}
+                                          onChange={e => handleExamFieldChange(s.id, 'class_work', e.target.value)}
+                                          className="w-14 border rounded px-1 py-1 text-center text-sm"
+                                        />
+                                      </td>
+                                      <td className="px-2 py-2 text-center">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="5"
+                                          step="0.5"
+                                          value={row.home_work ?? ''}
+                                          onChange={e => handleExamFieldChange(s.id, 'home_work', e.target.value)}
+                                          className="w-14 border rounded px-1 py-1 text-center text-sm"
+                                        />
+                                      </td>
+                                      <td className="px-2 py-2 text-center">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          step="0.5"
+                                          value={row.end_term ?? ''}
+                                          onChange={e => handleExamFieldChange(s.id, 'end_term', e.target.value)}
+                                          className="w-16 border rounded px-1 py-1 text-center text-sm"
+                                        />
+                                      </td>
+                                    </>
+                                  )}
                                   <td className="px-2 py-2 text-center font-semibold text-gray-700">{classScoreDisplay}</td>
                                   <td className="px-2 py-2 text-center font-semibold text-gray-700">{examScoreDisplay}</td>
                                   <td className="px-2 py-2 text-center font-bold text-blue-700">{totalDisplay}</td>

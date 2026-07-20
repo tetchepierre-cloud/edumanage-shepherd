@@ -136,18 +136,35 @@ export async function generateReportCard({ student, report, term, school }) {
 
   y += 28;
 
-  // Tableau des notes
+  // ── Tableau des notes (avec mise à l'échelle pour l'affichage) ──
   const isJhs = student.class && student.class.toUpperCase().includes('JHS');
   const headRow = isJhs
     ? ['Subject', 'CLASS (30)', 'EXAM (70)', 'TOTAL (100)', 'GRADE', 'REMARKS']
     : ['Subject', 'S.B.A (50)', 'EXAM (50)', 'TOTAL (100)', 'GRADE', 'REMARKS'];
 
   const tableData = report.subjects.map(function(sub) {
+    let sbaDisplay = '—';
+    let examDisplay = '—';
+    let totalDisplay = (sub.average !== null && sub.average !== undefined) ? sub.average.toFixed(1) : '—';
+
+    const midRaw = (sub.midTermScore !== null && sub.midTermScore !== undefined) ? sub.midTermScore : null;
+    const endRaw = (sub.endTermScore !== null && sub.endTermScore !== undefined) ? sub.endTermScore : null;
+
+    if (isJhs) {
+      // JHS : CLASS (30) = mid * 0.3, EXAM (70) = end * 0.7
+      sbaDisplay = (midRaw !== null) ? (midRaw * 0.3).toFixed(1) : '—';
+      examDisplay = (endRaw !== null) ? (endRaw * 0.7).toFixed(1) : '—';
+    } else {
+      // Primaire : diviser par 2 car stocké sur 100
+      sbaDisplay = (midRaw !== null) ? (midRaw / 2).toFixed(1) : '—';
+      examDisplay = (endRaw !== null) ? (endRaw / 2).toFixed(1) : '—';
+    }
+
     return [
       sub.subjectName,
-      (sub.midTermScore !== null && sub.midTermScore !== undefined) ? sub.midTermScore : '—',
-      (sub.endTermScore !== null && sub.endTermScore !== undefined) ? sub.endTermScore : '—',
-      (sub.average !== null && sub.average !== undefined) ? sub.average.toFixed(1) : '—',
+      sbaDisplay,
+      examDisplay,
+      totalDisplay,
       sub.gradeLetter || '—',
       sub.remarks || '—'
     ];

@@ -24,24 +24,21 @@ export default function GradeEntryPage() {
 
   const [classSubjects, setClassSubjects] = useState([]);
   const [students, setStudents] = useState([]);
-  const [grades, setGrades] = useState({});       // { studentId: { score, source } }
+  const [grades, setGrades] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
-  // ---- Continuous Assessment ----
   const [caMode, setCaMode] = useState(false);
   const [caComponents, setCaComponents] = useState([]);
   const [caScores, setCaScores] = useState({});
   const [caMessage, setCaMessage] = useState('');
 
-  // ── CHARGEMENT DES TERMES ──
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
   }, []);
 
-  // ── CHARGEMENT DES CLASSES (FILTRÉES PRIMARY / JHS) ──
   useEffect(() => {
     supabase.from('classes').select('id, name, level').order('sort_order')
       .then(({ data }) => {
@@ -59,29 +56,61 @@ export default function GradeEntryPage() {
       .then(({ data }) => setSequences(data || []));
   }, [selectedTerm]);
 
+  // ═══════════════════════════════════════════════════════════
+  // ═══ CHARGEMENT DES MATIÈRES (avec réinitialisation) ═══
+  // ═══════════════════════════════════════════════════════════
   useEffect(() => {
-    if (!selectedClass || !selectedTerm) { setClassSubjects([]); return; }
+    if (!selectedClass || !selectedTerm) {
+      setClassSubjects([]);
+      setSelectedSubject('');
+      return;
+    }
     const term = terms.find(t => t.id === selectedTerm);
     const year = term?.academic_year || '';
-    if (!year) return;
+    if (!year) {
+      setClassSubjects([]);
+      setSelectedSubject('');
+      return;
+    }
     supabase.from('class_subjects')
       .select('id, coefficient, subjects(name)')
-      .eq('class_id', selectedClass).eq('academic_year', year).eq('is_active', true).order('subject_id')
+      .eq('class_id', selectedClass)
+      .eq('academic_year', year)
+      .eq('is_active', true)
+      .order('subject_id')
       .then(({ data }) => {
         setClassSubjects(data || []);
-        if (data?.length) setSelectedSubject(data[0].id);
+        if (data?.length) {
+          setSelectedSubject(data[0].id);
+        } else {
+          setSelectedSubject('');
+        }
       });
-  }, [selectedClass, selectedTerm]);
+  }, [selectedClass, selectedTerm, terms]);
 
+  // ═══════════════════════════════════════════════════════════
+  // ═══ CHARGEMENT PRINCIPAL (réinitialisation + filtre séquence) ═══
+  // ═══════════════════════════════════════════════════════════
   useEffect(() => {
+    setStudents([]);
+    setGrades({});
+    setCaComponents([]);
+    setCaScores({});
+
     if (!selectedClass || !selectedSequence || !selectedSubject) {
-      setStudents([]); setGrades({}); setCaScores({}); return;
+      setLoading(false);
+      return;
     }
+
     setLoading(true);
     Promise.all([
       supabase.from('students').select('id, first_name, last_name').eq('class_id', selectedClass).eq('active', true).order('last_name'),
       supabase.from('grades').select('student_id, score, source').eq('class_subject_id', selectedSubject).eq('sequence_id', selectedSequence),
-      supabase.from('ca_components').select('*').eq('class_subject_id', selectedSubject).order('name'),
+      supabase.from('ca_components')
+        .select('*')
+        .eq('class_subject_id', selectedSubject)
+        .eq('sequence_id', selectedSequence)
+        .order('name'),
     ]).then(([pupilsRes, gradesRes, compRes]) => {
       setStudents(pupilsRes.data || []);
       const map = {};
@@ -89,16 +118,30 @@ export default function GradeEntryPage() {
       setGrades(map);
       setCaComponents(compRes.data || []);
       setLoading(false);
+    }).catch(err => {
+      console.error('Erreur chargement données:', err);
+      setLoading(false);
     });
   }, [selectedClass, selectedSequence, selectedSubject]);
 
+  // ── CHARGEMENT DES SCORES CA (filtré par séquence) ──
   useEffect(() => {
-    if (caComponents.length === 0 || students.length === 0) { setCaScores({}); return; }
+    if (caComponents.length === 0 || students.length === 0 || !selectedSequence) {
+      setCaScores({});
+      return;
+    }
+
     supabase.from('ca_scores')
       .select('student_id, ca_component_id, score')
+      .eq('sequence_id', selectedSequence)
       .in('student_id', students.map(s => s.id))
       .in('ca_component_id', caComponents.map(c => c.id))
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) {
+          console.error("Erreur lors du chargement des CA scores :", error);
+          return;
+        }
+
         const map = {};
         (data || []).forEach(s => {
           if (!map[s.student_id]) map[s.student_id] = {};
@@ -106,9 +149,9 @@ export default function GradeEntryPage() {
         });
         setCaScores(map);
       });
-  }, [caComponents, students]);
+  }, [caComponents, students, selectedSequence]);
 
-  // ── Mode direct ────────────────────────────────────────────────
+  // ── Mode direct ──
   const handleScoreChange = (studentId, value) => {
     const num = parseFloat(value);
     if (isNaN(num) || num < 0 || num > 100) return;
@@ -137,17 +180,18 @@ export default function GradeEntryPage() {
       return;
     }
     const { error } = await supabase.from('grades').upsert(payload, {
-      onConflict: 'student_id, class_subject_id, sequence_id',
+      onConflict: 'student_id,class_subject_id,sequence_id',
     });
     if (error) setMessage(`Error: ${error.message}`);
     else setMessage('Direct grades saved.');
     setSaving(false);
   };
 
-  // ── Continuous Assessment ──────────────────────────────────────
+  // ── Continuous Assessment ──
   const addComponent = async () => {
     const { data, error } = await supabase.from('ca_components').insert({
       class_subject_id: selectedSubject,
+      sequence_id: selectedSequence,
       name: 'New Component',
       weight: 10,
       max_score: 100,
@@ -175,22 +219,54 @@ export default function GradeEntryPage() {
   };
 
   const handleCalculateAndSave = async () => {
+    // === VALIDATIONS ===
+    if (!selectedSequence) {
+      setCaMessage('No sequence selected. Please select a sequence.');
+      return;
+    }
+    if (!selectedSubject) {
+      setCaMessage('No subject selected. Please select a subject.');
+      return;
+    }
+    if (!students || students.length === 0) {
+      setCaMessage('No students found.');
+      return;
+    }
+
+    // 1. Construire caPayload
     const caPayload = [];
     students.forEach(s => {
       caComponents.forEach(c => {
         const score = caScores[s.id]?.[c.id];
-        if (score !== undefined) {
-          caPayload.push({ student_id: s.id, ca_component_id: c.id, sequence_id: selectedSequence, score });
+        if (score !== undefined && score !== null && score !== '') {
+          caPayload.push({
+            student_id: s.id,
+            ca_component_id: c.id,
+            sequence_id: selectedSequence,
+            score: parseFloat(score)
+          });
         }
       });
     });
-    if (caPayload.length > 0) {
-      const { error: caError } = await supabase.from('ca_scores').upsert(caPayload, {
-        onConflict: 'student_id, ca_component_id, sequence_id',
-      });
-      if (caError) { setCaMessage('Error saving CA scores: ' + caError.message); return; }
+
+    // Filtrer caPayload (valeurs valides)
+    const validCaPayload = caPayload.filter(item => 
+      item.student_id && item.ca_component_id && item.sequence_id && item.score !== null && !isNaN(item.score)
+    );
+
+    if (validCaPayload.length > 0) {
+      const { error: caError } = await supabase
+        .from('ca_scores')
+        .upsert(validCaPayload, { 
+          onConflict: 'student_id,ca_component_id,sequence_id'
+        });
+      if (caError) {
+        setCaMessage('Error saving CA scores: ' + caError.message);
+        return;
+      }
     }
 
+    // 2. Calcul des grades
     const calculatedGrades = {};
     students.forEach(s => {
       let totalWeight = 0, weightedSum = 0;
@@ -199,14 +275,21 @@ export default function GradeEntryPage() {
         const sc = caScores[s.id]?.[c.id];
         if (sc !== undefined && w > 0) {
           const max = parseInt(c.max_score) || 100;
-          const normalized = (sc / max) * 100;  // ramène la note sur 100
+          const normalized = (sc / max) * 100;
           weightedSum += normalized * w;
           totalWeight += w;
         }
       });
-      if (totalWeight > 0) calculatedGrades[s.id] = parseFloat((weightedSum / totalWeight).toFixed(2));
+      if (totalWeight > 0) {
+        let grade = parseFloat((weightedSum / totalWeight).toFixed(2));
+        // Clamp pour éviter les valeurs hors limites (protection)
+        if (grade > 100) grade = 100;
+        if (grade < 0) grade = 0;
+        calculatedGrades[s.id] = grade;
+      }
     });
 
+    // 3. Construire gradePayload
     const gradePayload = students
       .filter(s => calculatedGrades[s.id] != null)
       .map(s => ({
@@ -217,16 +300,32 @@ export default function GradeEntryPage() {
         source: 'ca',
       }));
 
-    if (gradePayload.length === 0) {
-      setCaMessage('No grades to save. Ensure all students have at least one CA score.');
+    // 4. Vérification des valeurs > 100 (bloque l'envoi)
+    const invalidGrades = gradePayload.filter(g => g.score > 100 || g.score < 0);
+    if (invalidGrades.length > 0) {
+      const firstInvalid = invalidGrades[0];
+      const studentName = students.find(s => s.id === firstInvalid.student_id);
+      setCaMessage(
+        `Erreur : note finale > 100 détectée pour ${studentName?.first_name || 'un élève'} (${firstInvalid.score}). Vérifiez les saisies des composantes.`
+      );
       return;
     }
 
-    const { error: gradeError } = await supabase.from('grades').upsert(gradePayload, {
-      onConflict: 'student_id, class_subject_id, sequence_id',
-    });
-    if (gradeError) setCaMessage('Error saving grades: ' + gradeError.message);
-    else {
+    if (gradePayload.length === 0) {
+      setCaMessage('No valid grades to save. Check your scores.');
+      return;
+    }
+
+    // 5. Upsert sur grades
+    const { error: gradeError } = await supabase
+      .from('grades')
+      .upsert(gradePayload, { 
+        onConflict: 'student_id,class_subject_id,sequence_id'
+      });
+
+    if (gradeError) {
+      setCaMessage('Error saving grades: ' + gradeError.message);
+    } else {
       setCaMessage('CA scores and final grades saved!');
       setGrades(prev => {
         const next = { ...prev };
@@ -238,7 +337,6 @@ export default function GradeEntryPage() {
     }
   };
 
-  // ── Rendu ──────────────────────────────────────────────────────
   const selectedSubjectName = classSubjects.find(cs => cs.id === selectedSubject)?.subjects?.name || 'Subject';
 
   return (
@@ -262,7 +360,6 @@ export default function GradeEntryPage() {
         )}
       </div>
 
-      {/* Filtres */}
       <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-4 items-end">
         <CanSee module="grades" section="selectors" element="Term select">
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Term</label>
@@ -398,7 +495,10 @@ export default function GradeEntryPage() {
             <button onClick={async () => {
               for (const c of DEFAULT_CA_COMPONENTS) {
                 const { data } = await supabase.from('ca_components').insert({
-                  class_subject_id: selectedSubject, name: c.name, weight: c.weight,
+                  class_subject_id: selectedSubject,
+                  sequence_id: selectedSequence,
+                  name: c.name,
+                  weight: c.weight,
                 }).select().single();
                 if (data) setCaComponents(prev => [...prev, data]);
               }
@@ -432,10 +532,15 @@ export default function GradeEntryPage() {
                         {caComponents.map(c => (
                           <td key={c.id} className="px-2 py-2 text-center">
                             <CanAct module="grades" section="table" element="CA score fields">
-                              <input type="number" min="0" max="100" step="0.01"
+                              <input type="number" min="0" max={c.max_score || 100} step="0.01"
                                 value={caScores[s.id]?.[c.id] !== undefined ? caScores[s.id][c.id] : ''}
                                 onChange={e => handleCaScoreChange(s.id, c.id, e.target.value)}
-                                className="w-16 text-center border rounded px-1 py-0.5 text-xs"
+                                className={`w-16 text-center border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-300 ${
+                                  caScores[s.id]?.[c.id] > (c.max_score || 100)
+                                    ? 'border-red-500 bg-red-50 text-red-700'
+                                    : ''
+                                }`}
+                                title={caScores[s.id]?.[c.id] > (c.max_score || 100) ? `Score maximum: ${c.max_score}` : ''}
                               />
                             </CanAct>
                           </td>

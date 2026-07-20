@@ -21,11 +21,9 @@ export default function ReportCardPage() {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
       
-    // ── CHARGEMENT DES CLASSES AVEC LOGS ──
     supabase.from('classes').select('id, name, level').order('sort_order', { ascending: true })
       .then(({ data }) => {
         console.log('🔍 Données brutes des classes :', data);
-        // Filtrage par nom (Primary ou JHS)
         const primaryJhsClasses = (data || []).filter(c => 
           c.name && (c.name.includes('Primary') || c.name.includes('JHS'))
         );
@@ -182,17 +180,43 @@ export default function ReportCardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {report.subjects?.map((sub, idx) => (
-                  <tr key={idx}>
-                    <td className="px-4 py-2">{sub.subjectName}</td>
-                    <td className="px-4 py-2 text-center">{sub.midTermScore ?? '—'}</td>
-                    <td className="px-4 py-2 text-center">{sub.endTermScore ?? '—'}</td>
-                    <td className="px-4 py-2 text-center font-medium">{sub.average !== null ? sub.average.toFixed(1) : '—'}</td>
-                    <td className="px-4 py-2 text-center">{sub.average !== null ? sub.gradeLetter : '—'}</td>
-                    <td className="px-4 py-2 text-center">{sub.pos ?? '—'}</td>
-                    <td className="px-4 py-2 text-center">{sub.remarks ?? '—'}</td>
-                  </tr>
-                ))}
+                {report.subjects?.map((sub, idx) => {
+                  // 1. Déterminer si la classe sélectionnée appartient au niveau JHS
+                  const isJhs = classes.find(c => c.id === selectedClass)?.level === 'JHS';
+                  
+                  // 2. Initialiser les variables d'affichage des notes
+                  let midTermDisplay = '—';
+                  let endTermDisplay = '—';
+                  
+                  // 3. Appliquer les coefficients de calcul selon le niveau (Primaire vs JHS)
+                  if (sub.midTermScore !== null && sub.midTermScore !== undefined) {
+                    midTermDisplay = isJhs 
+                      ? (sub.midTermScore * 0.3).toFixed(1) 
+                      : (sub.midTermScore / 2).toFixed(1);
+                  }
+                  
+                  if (sub.endTermScore !== null && sub.endTermScore !== undefined) {
+                    endTermDisplay = isJhs 
+                      ? (sub.endTermScore * 0.7).toFixed(1) 
+                      : (sub.endTermScore / 2).toFixed(1);
+                  }
+
+                  return (
+                    <tr key={idx} className="border-b hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-2">{sub.subjectName}</td>
+                      <td className="px-4 py-2 text-center">{midTermDisplay}</td>
+                      <td className="px-4 py-2 text-center">{endTermDisplay}</td>
+                      <td className="px-4 py-2 text-center font-medium">
+                        {sub.average !== null ? sub.average.toFixed(1) : '—'}
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        {sub.average !== null ? sub.gradeLetter : '—'}
+                      </td>
+                      <td className="px-4 py-2 text-center">{sub.pos ?? '—'}</td>
+                      <td className="px-4 py-2 text-center">{sub.remarks ?? '—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
               <tfoot className="bg-gray-50 font-semibold">
                 <tr>

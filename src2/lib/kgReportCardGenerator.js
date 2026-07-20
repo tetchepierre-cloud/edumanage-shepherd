@@ -1,4 +1,4 @@
-// src/lib/kgReportCardGenerator.js
+// src/lib/kgReportCardGenerator.js (École 2 – Shepherd Mirrors Academy)
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 
@@ -229,10 +229,10 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
       head: [['Description', 'A', 'S', 'N', 'NH']],
       body: section.items.map(item => [
         item.desc,
-        item.val === 'A' ? 'X' : '',
-        item.val === 'S' ? 'X' : '',
-        item.val === 'N' ? 'X' : '',
-        item.val === 'NH' ? 'X' : ''
+        item.val === 'A' ? '✔' : '',
+        item.val === 'S' ? '✔' : '',
+        item.val === 'N' ? '✔' : '',
+        item.val === 'NH' ? '✔' : ''
       ]),
       theme: 'grid',
       styles: {
@@ -258,10 +258,11 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
        4: { halign: 'center', cellWidth: 6, fontSize: 9, fontStyle: 'bold' }
      },
       didParseCell: (data) => {
-        if (data.section === 'body' && data.column.index > 0 && data.cell.raw === 'X') {
-          data.cell.styles.fillColor = colors.gold;
+        if (data.section === 'body' && data.column.index > 0 && data.cell.raw === '✔') {
           data.cell.styles.textColor = [0, 0, 0];
-          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.font = 'zapfdingbats';
+          data.cell.styles.fontStyle = 'normal';
+          data.cell.text = ['4'];
         }
       }
     });
