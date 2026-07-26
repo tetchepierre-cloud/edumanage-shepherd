@@ -155,7 +155,7 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
   doc.setTextColor(...colors.inkSoft);
   doc.text('TOTAL ATTENDANCE:', marginX + 4, y + 26);
   doc.text("PUPIL'S ATTENDANCE:", 110, y + 26);
-  doc.text('NO. ON ROLL:', 160, y + 26);
+  doc.text('TOTAL ABSENCES:', 160, y + 26);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
@@ -169,11 +169,11 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
 
   const x1 = marginX + 4 + getTextWidth('TOTAL ATTENDANCE:') + 2;
   const x2 = 110 + getTextWidth("PUPIL'S ATTENDANCE:") + 2;
-  const x3 = 160 + getTextWidth('NO. ON ROLL:') + 2;
+  const x3 = 160 + getTextWidth('TOTAL ABSENCES:') + 2;
 
   doc.text(String(report.attendance?.total || '—'), x1, y + 26);
   doc.text(String(report.attendance?.present || '—'), x2, y + 26);
-  doc.text(String(report.numberOnRoll || '—'), x3, y + 26);
+  doc.text(String(report.attendance?.absent || '—'), x3, y + 26);
 
   let currentY = y + 32;
 
@@ -314,7 +314,7 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
 
   currentY += 12;
 
-  // ── TABLEAU DES RÉSULTATS D'EXAMEN (Le Détail) ──
+  // ── TABLEAU DES RÉSULTATS D'EXAMEN ──
   if (report.examResults && report.examResults.length > 0) {
     autoTable(doc, {
       startY: currentY,
@@ -331,7 +331,7 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
       },
       alternateRowStyles: { fillColor: colors.rowAlt },
       styles: { 
-        fontSize: 8, 
+        fontSize: 10, 
         cellPadding: 1.8,
         lineColor: colors.border, 
         lineWidth: 0.1, 
@@ -365,7 +365,7 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
       headStyles: {
         fillColor: colors.paper,
         textColor: colors.muted,
-        fontSize: 7,
+        fontSize: 9,
         halign: 'center',
         fontStyle: 'bold',
         lineColor: colors.gold,
@@ -384,7 +384,7 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
 
     currentY = doc.lastAutoTable.finalY + 6;
 
-    // ── BLOC DE SYNTHÈSE QUALITATIVE (CONCLUSION DU BULLETIN) ──
+    // ── BLOC DE SYNTHÈSE QUALITATIVE (corrigé) ──
     if (report.overallAverage !== undefined && report.overallAverage !== null) {
       const avg = parseFloat(report.overallAverage);
 
@@ -392,7 +392,6 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
         let commentLabel = "";
         let commentText = "";
 
-        // Application du barème (en Anglais)
         if (avg >= 90) {
           commentLabel = "Exceptional";
           commentText = "Your child greatly exceeds the term's objectives. Congratulations on this excellent performance!";
@@ -416,12 +415,10 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
           commentText = "Your child requires sustained support. We are implementing tailored activities to help them advance at their own pace.";
         }
 
-        // ── Adaptation au genre ──
         const gender = report.sex ? report.sex.toLowerCase() : '';
         const isMale = gender === 'male';
         const isFemale = gender === 'female';
 
-        // Fonction de remplacement des pronoms (CORRIGÉE : gère "They are" → "He is" / "She is")
         const replacePronouns = (text) => {
           if (!isMale && !isFemale) return text;
           const subj = isMale ? 'he' : 'she';
@@ -440,13 +437,21 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
 
         const genderedComment = replacePronouns(commentText);
 
-        // ── Configuration visuelle ──
-        const boxPad = 5;
-        doc.setFont('times', 'italic');
+        // ── Configuration visuelle (correction définitive) ──
+        const boxPad = 6;
+        const maxTextWidth = contentW - (boxPad * 2);
+
+        // 1. CRITIQUE : Définir la police FINALE avant de couper le texte
+        doc.setFont('helvetica', 'bold');
         doc.setFontSize(10.5);
-        const splitText = doc.splitTextToSize(genderedComment, contentW - (boxPad * 2));
-        const textHeight = splitText.length * 5.5;
-        const boxH = 12 + textHeight;
+
+        // 2. Couper le texte (jsPDF utilisera l'encombrement du Helvetica Bold)
+        const splitText = doc.splitTextToSize(genderedComment, maxTextWidth);
+        
+        // 3. Calculer la hauteur dynamiquement
+        const lineHeight = 5;
+        const textHeight = splitText.length * lineHeight;
+        const boxH = 15 + textHeight;
 
         // Fond crème et bordure dorée
         doc.setFillColor(253, 251, 244);
@@ -454,29 +459,25 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
         doc.setLineWidth(0.4);
         doc.roundedRect(marginX, currentY, contentW, boxH, 2.5, 2.5, 'FD');
 
-        // Ligne 1 : PERFORMANCE: label (en bleu marine, gras, helvetica)
+        // Ligne 1 : PERFORMANCE:
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(10.5);
         const xStart = marginX + boxPad;
-        // "PERFORMANCE: " en bleu marine
         doc.setTextColor(...colors.navy);
         const part1 = `PERFORMANCE: `;
         doc.text(part1, xStart, currentY + 6);
-        // Le label (ex: SATISFACTORY) en or
         const widthPart1 = doc.getTextWidth(part1);
         doc.setTextColor(...colors.gold);
         doc.text(commentLabel.toUpperCase(), xStart + widthPart1, currentY + 6);
 
-        // Ligne de séparation
+        // Séparateur
         doc.setDrawColor(230, 220, 190);
         doc.setLineWidth(0.2);
         doc.line(marginX + boxPad, currentY + 8.5, pageW - marginX - boxPad, currentY + 8.5);
 
-        // Ligne 2 : Commentaire (helvetica, gras, noir)
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(10.5);
+        // Ligne 2 : Commentaire (avec le texte coupé)
         doc.setTextColor(0, 0, 0);
-        doc.text(splitText, marginX + boxPad, currentY + 13);
+        doc.text(splitText, marginX + boxPad, currentY + 13.5);
 
         currentY += boxH + 6;
       }
@@ -490,38 +491,59 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
     currentY += 6;
   }
 
-  // PROMOTED / CONDUCT / ATTITUDE
-  autoTable(doc, {
-    startY: currentY,
-    margin: { left: marginX, right: marginX },
-    tableWidth: contentW,
-    body: [
-      [`PROMOTED TO: ${report.promotedTo || '—'}`],
-      [`CONDUCT: ${report.conduct || '—'}`, `ATTITUDE: ${report.attitude || '—'}`]
-    ],
-    theme: 'grid',
-    styles: {
-      fontSize: 8.5,
-      cellPadding: 1.6,
-      lineColor: [217, 205, 166],
-      lineWidth: 0.15,
-      fillColor: colors.paper,
-      textColor: colors.ink
-    },
-    columnStyles: {
-      0: { cellWidth: contentW * 0.5 },
-      1: { cellWidth: contentW * 0.5 }
-    }
-  });
+  // ── PROMOTED TO, CONDUCT, ATTITUDE (sur la même ligne) ──
+  const promotedValue = report.promotedTo && report.promotedTo !== '—' ? report.promotedTo : '—';
+  const conductValue = report.conduct || '—';
+  const attitudeValue = report.attitude || '—';
 
-  currentY = doc.lastAutoTable.finalY + 6;
+  currentY += 4;
 
-  // Remarques et signatures
+  // Promoted To (gauche)
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...colors.ink);
+  const labelPromoted = 'PROMOTED TO:';
+  const xLeft = marginX;
+  doc.text(labelPromoted, xLeft, currentY);
+  const labelWidthPromoted = doc.getTextWidth(labelPromoted);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(...colors.navy);
+  doc.text(promotedValue, xLeft + labelWidthPromoted + 2, currentY);
+
+  // Conduct (centre)
+  const labelConduct = 'CONDUCT:';
+  const xCenter = pageW / 2 - doc.getTextWidth(labelConduct + ' ' + conductValue) / 2;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...colors.ink);
+  doc.text(labelConduct, xCenter, currentY);
+  const labelWidthConduct = doc.getTextWidth(labelConduct);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(...colors.navy);
+  doc.text(conductValue, xCenter + labelWidthConduct + 2, currentY);
+
+  // Attitude (droite)
+  const labelAttitude = 'ATTITUDE:';
+  const xRight = pageW - marginX - doc.getTextWidth(labelAttitude + ' ' + attitudeValue);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...colors.ink);
+  doc.text(labelAttitude, xRight, currentY);
+  const labelWidthAttitude = doc.getTextWidth(labelAttitude);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(...colors.navy);
+  doc.text(attitudeValue, xRight + labelWidthAttitude + 2, currentY);
+
+  currentY += 12;
+
+  // ── Remarques et signatures ──
   const boxW = (contentW - 6) / 2;
   doc.setDrawColor(217, 205, 166);
   doc.setFillColor(255, 255, 255);
-  
-  const rectHeight = 18 * 1.35; // 24.3 mm (augmentation de 135%)
+  const rectHeight = 18 * 1.35;
   doc.rect(marginX, currentY, boxW, rectHeight);
   doc.rect(marginX + boxW + 6, currentY, boxW, rectHeight);
 
@@ -531,7 +553,7 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
   doc.text("CLASS TEACHER'S REMARK", marginX + 2, currentY + 5);
   doc.text("SCHOOL MANAGER'S REMARK", marginX + boxW + 8, currentY + 5);
 
-  currentY += 30 * 1.35; // 40.5 mm
+  currentY += 30 * 1.35;
 
   doc.setFontSize(8);
   doc.setTextColor(...colors.inkSoft);
@@ -541,22 +563,11 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
   doc.line(marginX + boxW + 6, currentY, pageW - marginX, currentY);
   doc.text('School Manager’s Signature, Date & Stamp', marginX + boxW + 6, currentY + 4);
 
-  currentY += 18;
+  // ── Le bloc "PARENT'S / GUARDIAN'S SIGNATURE" est supprimé ──
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(...colors.navy);
-  doc.text("PARENT'S / GUARDIAN'S SIGNATURE: ...........................................................", pageW / 2, currentY, { align: 'center' });
-  
-  currentY += 6;
-  doc.setFont('helvetica', 'italic');
-  doc.setFontSize(7.5);
-  doc.setTextColor(...colors.inkSoft);
-  doc.text('(Please sign and return this report to the school)', pageW / 2, currentY, { align: 'center' });
-
-  // ── Dates de fin de terme et de reprise (Page 2) ──
+  // ── Dates de fin de terme et de reprise ──
   if (school?.vacationStart || school?.resumption) {
-    currentY += 8;
+    currentY += 20;
   
     doc.setFillColor(255, 255, 245);
     doc.roundedRect(marginX, currentY, contentW, 10, 1.5, 1.5, 'F');

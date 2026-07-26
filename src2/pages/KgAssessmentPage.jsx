@@ -24,6 +24,14 @@ const RUBRICS = [
   { value: 'NH', label: 'Needs Help' }
 ];
 
+// Ordre des niveaux pour la promotion
+const LEVEL_ORDER = [
+  'Nursery 1', 'Nursery 2',
+  'KG 1', 'KG 2',
+  'Primary 1', 'Primary 2', 'Primary 3', 'Primary 4', 'Primary 5', 'Primary 6',
+  'JHS 1', 'JHS 2'
+];
+
 export default function KgAssessmentPage() {
   const [terms, setTerms] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -40,16 +48,28 @@ export default function KgAssessmentPage() {
   // ── Mode de saisie : 'assessment' ou 'exam' ──
   const [viewMode, setViewMode] = useState('assessment');
   const [subjects, setSubjects] = useState([]);
-  const [examResults, setExamResults] = useState({}); // { subject_id: { ... } }
+  const [examResults, setExamResults] = useState({});
   const [savingExam, setSavingExam] = useState(false);
   const [examMessage, setExamMessage] = useState('');
 
   // ── Mode d'examen : 'simple' (2 notes) ou 'detailed' (4 notes) ──
   const [examMode, setExamMode] = useState('detailed');
 
+  // ── États pour l'assiduité, promotion, conduite, attitude ──
+  const [totalSchoolDays, setTotalSchoolDays] = useState(65);
+  const [absences, setAbsences] = useState('');
+  const [promotedTo, setPromotedTo] = useState('');
+  const [conduct, setConduct] = useState('');
+  const [attitude, setAttitude] = useState('');
+  const [allClasses, setAllClasses] = useState([]);
+
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
+
+    // Charger toutes les classes pour la promotion
+    supabase.from('classes').select('id, name, level, sort_order').order('sort_order', { ascending: true })
+      .then(({ data }) => setAllClasses(data || []));
 
     supabase.from('classes').select('id, name, level').order('sort_order', { ascending: true })
       .then(({ data }) => {
@@ -73,8 +93,8 @@ export default function KgAssessmentPage() {
       vacationStart: cfg.vacation_start_date || '',
       resumption: cfg.resumption_date || ''
     });
-    // Lire le mode KG
     setExamMode(cfg.kg_exam_mode === 'simple' ? 'simple' : 'detailed');
+    setTotalSchoolDays(parseInt(cfg.total_school_days) || 65);
   };
 
   useEffect(() => {
@@ -153,11 +173,35 @@ export default function KgAssessmentPage() {
       });
   }, [selectedStudent, selectedTerm, selectedClass, examMode]);
 
+  // ── Extraire le niveau d'un nom de classe ──
+  const extractLevelFromClassName = (className) => {
+    if (!className) return '';
+    const parts = className.trim().split(' ');
+    const lastPart = parts[parts.length - 1];
+    if (lastPart.length === 1 && lastPart >= 'A' && lastPart <= 'Z') {
+      return parts.slice(0, parts.length - 1).join(' ');
+    }
+    return className;
+  };
+
+  // ── Obtenir les options de promotion (niveaux supérieurs) ──
+  const getPromotionOptions = () => {
+    if (!selectedClass) return [];
+    const currentClass = allClasses.find(c => c.id === selectedClass);
+    if (!currentClass) return [];
+    const levelName = extractLevelFromClassName(currentClass.name);
+    if (!levelName) return [];
+    const currentIndex = LEVEL_ORDER.indexOf(levelName);
+    if (currentIndex === -1) return [];
+    return LEVEL_ORDER.filter((_, index) => index > currentIndex);
+  };
+
+  const promotionOptions = getPromotionOptions();
+
   const handleRubricChange = (criteriaItem, rubricValue) => {
     setAssessments(prev => ({ ...prev, [criteriaItem]: rubricValue }));
   };
 
-  // ── Sauvegarde des rubriques ──
   const handleSave = async () => {
     if (!selectedTerm || !selectedClass || !selectedStudent) return;
 
@@ -197,7 +241,6 @@ export default function KgAssessmentPage() {
     }
   };
 
-  // ── Gestion des champs bruts ──
   const handleExamFieldChange = (subjectId, field, value) => {
     setExamResults(prev => ({
       ...prev,
@@ -208,7 +251,6 @@ export default function KgAssessmentPage() {
     }));
   };
 
-  // ── Calcul automatique des scores selon le mode ──
   const computeScores = (row) => {
     if (!row) return { classScore: null, examScore: null, total: null };
     if (examMode === 'simple') {
@@ -238,7 +280,6 @@ export default function KgAssessmentPage() {
     }
   };
 
-  // ── Barème GES pour Preschool ──
   const getGradeRemarks = (total) => {
     if (total === null || isNaN(total) || total === '—') return { grade: '', remark: '' };
     const t = parseFloat(total);
@@ -249,7 +290,6 @@ export default function KgAssessmentPage() {
     return { grade: 'B', remark: 'Beginner' };
   };
 
-  // ── Sauvegarde des résultats d'examen selon le mode ──
   const handleSaveExam = async () => {
     if (!selectedTerm || !selectedClass || !selectedStudent) return;
 
@@ -343,21 +383,16 @@ export default function KgAssessmentPage() {
     }
   };
 
-  // ── Impression du bulletin ──
   const handlePrint = async () => {
     if (!selectedStudent || !selectedTerm) return;
     const term = terms.find(t => t.id === selectedTerm);
     const className = classes.find(c => c.id === selectedClass)?.name || '';
 
-    const { data: termData } = await supabase.from('academic_terms').select('start_date, end_date').eq('id', selectedTerm).single();
-    let attendance = { present: 0, total: 0 };
-    if (termData) {
-      const { data: atts } = await supabase.from('attendance').select('status').eq('student_id', selectedStudent.id).gte('date', termData.start_date).lte('date', termData.end_date);
-      (atts || []).forEach(a => {
-        attendance.total++;
-        if (a.status === 'P') attendance.present++;
-      });
-    }
+    // Calcul de l'assiduité avec les valeurs manuelles
+    const total = parseInt(totalSchoolDays) || 0;
+    const absent = parseInt(absences) || 0;
+    const present = Math.max(0, total - absent);
+    const attendance = { present, absent, total };
 
     // ── Récupérer les résultats d'examen ──
     const { data: examRows } = await supabase
@@ -447,7 +482,10 @@ export default function KgAssessmentPage() {
       overallAverage: overallAverage,
       rank: rank || '—',
       numberOnRoll: numberOnRoll || 0,
-      examMode: examMode  // On passe le mode pour le générateur
+      examMode: examMode,
+      promotedTo: promotedTo || '',
+      conduct: conduct || '',
+      attitude: attitude || '',
     };
 
     KG_CRITERIA.forEach(group => {
@@ -492,6 +530,18 @@ export default function KgAssessmentPage() {
             </select>
           </div>
         </CanSee>
+
+        {/* ── School Days reste dans la barre de filtres (global) ── */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">School Days</label>
+          <input
+            type="number"
+            min="1"
+            value={totalSchoolDays}
+            readOnly
+            className="border rounded px-2 py-1.5 text-sm w-20 bg-gray-100 cursor-default"
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -529,9 +579,60 @@ export default function KgAssessmentPage() {
                   <p className="text-xs text-blue-700">Fill the rubrics for {terms.find(t => t.id === selectedTerm)?.name}</p>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {/* ── Bascule Assessment / Examination Results ── */}
-                  <div className="flex bg-white border rounded-lg p-1 mr-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* ── Absences (spécifique à l'élève, placé ici) ── */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-0.5">Absences</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={absences}
+                      onChange={e => setAbsences(e.target.value)}
+                      className="border rounded px-2 py-1 text-sm w-16"
+                    />
+                  </div>
+
+                  {/* ── Promoted to ── */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-0.5">Promoted to</label>
+                    <select
+                      value={promotedTo}
+                      onChange={e => setPromotedTo(e.target.value)}
+                      className="border rounded px-2 py-1 text-sm w-28 bg-white"
+                    >
+                      <option value="">-- Select --</option>
+                      {promotionOptions.map(level => (
+                        <option key={level} value={level}>{level}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* ── Conduct ── */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-0.5">Conduct</label>
+                    <input
+                      type="text"
+                      value={conduct}
+                      onChange={e => setConduct(e.target.value)}
+                      placeholder="e.g. Excellent"
+                      className="border rounded px-2 py-1 text-sm w-24"
+                    />
+                  </div>
+
+                  {/* ── Attitude ── */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-0.5">Attitude</label>
+                    <input
+                      type="text"
+                      value={attitude}
+                      onChange={e => setAttitude(e.target.value)}
+                      placeholder="e.g. Positive"
+                      className="border rounded px-2 py-1 text-sm w-24"
+                    />
+                  </div>
+
+                  {/* ── Bascule Assessment / Exam ── */}
+                  <div className="flex bg-white border rounded-lg p-1">
                     <button
                       onClick={() => setViewMode('assessment')}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'assessment' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
@@ -542,7 +643,7 @@ export default function KgAssessmentPage() {
                       onClick={() => setViewMode('exam')}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'exam' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
                     >
-                      <FileSpreadsheet size={14} /> Examination Results
+                      <FileSpreadsheet size={14} /> Examination
                     </button>
                   </div>
 
@@ -568,6 +669,7 @@ export default function KgAssessmentPage() {
                 </div>
               </div>
 
+              {/* ── Contenu principal (assessment ou exam) ── */}
               {viewMode === 'assessment' ? (
                 <div className="p-6 overflow-y-auto flex-1 space-y-8">
                   {KG_CRITERIA.map(group => (
@@ -646,7 +748,6 @@ export default function KgAssessmentPage() {
                           <tbody className="divide-y divide-gray-100">
                             {subjects.map(s => {
                               const row = examResults[s.id] || {};
-                              // Construire un objet row pour computeScores
                               let rowForCompute;
                               if (examMode === 'simple') {
                                 rowForCompute = {

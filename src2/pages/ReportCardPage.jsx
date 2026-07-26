@@ -6,6 +6,14 @@ import { generateReportCard } from '../lib/reportCardGenerator';
 import { Printer } from 'lucide-react';
 import { CanAct, CanSee } from '../components/PermissionGate';
 
+// Ordre des niveaux pour la promotion
+const LEVEL_ORDER = [
+  'Nursery 1', 'Nursery 2',
+  'KG 1', 'KG 2',
+  'Primary 1', 'Primary 2', 'Primary 3', 'Primary 4', 'Primary 5', 'Primary 6',
+  'JHS 1', 'JHS 2'
+];
+
 export default function ReportCardPage() {
   const [terms, setTerms] = useState([]);
   const [selectedTerm, setSelectedTerm] = useState('');
@@ -17,10 +25,22 @@ export default function ReportCardPage() {
   const [loading, setLoading] = useState(false);
   const [school, setSchool] = useState({ name: '', address: '', phone: '' });
 
+  // États pour l'assiduité manuelle et la promotion
+  const [totalSchoolDays, setTotalSchoolDays] = useState(65);
+  const [absences, setAbsences] = useState('');
+  const [promotedTo, setPromotedTo] = useState('');
+
+  // Toutes les classes pour la sélection des niveaux
+  const [allClasses, setAllClasses] = useState([]);
+
   useEffect(() => {
     supabase.from('academic_terms').select('*').eq('is_active', true).order('term_number')
       .then(({ data }) => setTerms(data || []));
-      
+
+    // Charger toutes les classes pour la promotion
+    supabase.from('classes').select('id, name, level, sort_order').order('sort_order', { ascending: true })
+      .then(({ data }) => setAllClasses(data || []));
+
     supabase.from('classes').select('id, name, level').order('sort_order', { ascending: true })
       .then(({ data }) => {
         console.log('🔍 Données brutes des classes :', data);
@@ -38,6 +58,7 @@ export default function ReportCardPage() {
     const { data } = await supabase.from('app_settings').select('*');
     const cfg = {};
     data?.forEach(d => { cfg[d.key] = d.value; });
+    setTotalSchoolDays(parseInt(cfg.total_school_days) || 65);
     setSchool({
       name:    cfg.school_name || 'School',
       address: cfg.address     || '',
@@ -70,6 +91,31 @@ export default function ReportCardPage() {
     fetchStudents();
   }, [selectedClass]);
 
+  // ── Extraire le niveau d'un nom de classe ──
+  const extractLevelFromClassName = (className) => {
+    if (!className) return '';
+    const parts = className.trim().split(' ');
+    const lastPart = parts[parts.length - 1];
+    if (lastPart.length === 1 && lastPart >= 'A' && lastPart <= 'Z') {
+      return parts.slice(0, parts.length - 1).join(' ');
+    }
+    return className;
+  };
+
+  // ── Obtenir les options de promotion (niveaux supérieurs) ──
+  const getPromotionOptions = () => {
+    if (!selectedClass) return [];
+    const currentClass = allClasses.find(c => c.id === selectedClass);
+    if (!currentClass) return [];
+    const levelName = extractLevelFromClassName(currentClass.name);
+    if (!levelName) return [];
+    const currentIndex = LEVEL_ORDER.indexOf(levelName);
+    if (currentIndex === -1) return [];
+    return LEVEL_ORDER.filter((_, index) => index > currentIndex);
+  };
+
+  const promotionOptions = getPromotionOptions();
+
   const handleCompute = async () => {
     if (!selectedStudent || !selectedTerm) return;
     setLoading(true);
@@ -92,6 +138,14 @@ export default function ReportCardPage() {
 
     const rep = await computeTermReport(selectedStudent, selectedTerm);
 
+    const total = parseInt(totalSchoolDays) || 0;
+    const absent = parseInt(absences) || 0;
+    const present = Math.max(0, total - absent);
+    const attendanceData = { present, absent, total };
+
+    // Nombre d'élèves dans la classe – directement depuis le state students
+    const currentNumberOnRoll = students.length;
+
     generateReportCard({
       student: {
         first_name: fullStudent?.first_name || '—',
@@ -99,7 +153,12 @@ export default function ReportCardPage() {
         class:      classes.find(c => c.id === selectedClass)?.name || '',
         date_of_birth: fullStudent?.date_of_birth || '',
       },
-      report: rep,
+      report: {
+        ...rep,
+        attendance: attendanceData,
+        promotedTo: promotedTo || '',
+        numberOnRoll: currentNumberOnRoll,
+      },
       term,
       school,
     });
@@ -138,6 +197,34 @@ export default function ReportCardPage() {
             </select>
           </div>
         </CanSee>
+
+        {/* Assiduité manuelle */}
+        <div className="flex items-end gap-2">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">School Days</label>
+            <input type="number" min="1" value={totalSchoolDays} readOnly className="border rounded px-2 py-1.5 text-sm w-20 bg-gray-100 cursor-default" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Absences</label>
+            <input type="number" min="0" value={absences} onChange={e => setAbsences(e.target.value)} className="border rounded px-2 py-1.5 text-sm w-16" />
+          </div>
+        </div>
+
+        {/* Promotion avec sélecteur de niveaux supérieurs */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Promoted to</label>
+          <select
+            value={promotedTo}
+            onChange={e => setPromotedTo(e.target.value)}
+            className="border rounded px-2 py-1.5 text-sm w-32 bg-white"
+          >
+            <option value="">-- Select --</option>
+            {promotionOptions.map(level => (
+              <option key={level} value={level}>{level}</option>
+            ))}
+          </select>
+        </div>
+
         <CanAct module="report-cards" section="header" element="Compute button">
           <button onClick={handleCompute} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Compute</button>
         </CanAct>
@@ -181,37 +268,22 @@ export default function ReportCardPage() {
               </thead>
               <tbody className="divide-y">
                 {report.subjects?.map((sub, idx) => {
-                  // 1. Déterminer si la classe sélectionnée appartient au niveau JHS
                   const isJhs = classes.find(c => c.id === selectedClass)?.level === 'JHS';
-                  
-                  // 2. Initialiser les variables d'affichage des notes
-                  let midTermDisplay = '—';
-                  let endTermDisplay = '—';
-                  
-                  // 3. Appliquer les coefficients de calcul selon le niveau (Primaire vs JHS)
+                  let midDisplay = '—';
+                  let endDisplay = '—';
                   if (sub.midTermScore !== null && sub.midTermScore !== undefined) {
-                    midTermDisplay = isJhs 
-                      ? (sub.midTermScore * 0.3).toFixed(1) 
-                      : (sub.midTermScore / 2).toFixed(1);
+                    midDisplay = isJhs ? (sub.midTermScore * 0.3).toFixed(1) : (sub.midTermScore / 2).toFixed(1);
                   }
-                  
                   if (sub.endTermScore !== null && sub.endTermScore !== undefined) {
-                    endTermDisplay = isJhs 
-                      ? (sub.endTermScore * 0.7).toFixed(1) 
-                      : (sub.endTermScore / 2).toFixed(1);
+                    endDisplay = isJhs ? (sub.endTermScore * 0.7).toFixed(1) : (sub.endTermScore / 2).toFixed(1);
                   }
-
                   return (
-                    <tr key={idx} className="border-b hover:bg-gray-50 transition-colors">
+                    <tr key={idx}>
                       <td className="px-4 py-2">{sub.subjectName}</td>
-                      <td className="px-4 py-2 text-center">{midTermDisplay}</td>
-                      <td className="px-4 py-2 text-center">{endTermDisplay}</td>
-                      <td className="px-4 py-2 text-center font-medium">
-                        {sub.average !== null ? sub.average.toFixed(1) : '—'}
-                      </td>
-                      <td className="px-4 py-2 text-center">
-                        {sub.average !== null ? sub.gradeLetter : '—'}
-                      </td>
+                      <td className="px-4 py-2 text-center">{midDisplay}</td>
+                      <td className="px-4 py-2 text-center">{endDisplay}</td>
+                      <td className="px-4 py-2 text-center font-medium">{sub.average !== null ? sub.average.toFixed(1) : '—'}</td>
+                      <td className="px-4 py-2 text-center">{sub.average !== null ? sub.gradeLetter : '—'}</td>
                       <td className="px-4 py-2 text-center">{sub.pos ?? '—'}</td>
                       <td className="px-4 py-2 text-center">{sub.remarks ?? '—'}</td>
                     </tr>

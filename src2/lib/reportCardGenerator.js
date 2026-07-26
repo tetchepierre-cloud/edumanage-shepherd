@@ -1,4 +1,4 @@
-// src/lib/reportCardGenerator.js
+// src/lib/reportCardGenerator.js (École 2 – Shepherd Mirrors Academy)
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 
@@ -8,6 +8,10 @@ export async function generateReportCard({ student, report, term, school }) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
+
+  // ── Variables de marges ──
+  const marginX = 14;
+  const contentW = pageW - marginX * 2;
 
   const colors = {
     navy: [11, 31, 58],
@@ -53,13 +57,11 @@ export async function generateReportCard({ student, report, term, school }) {
     const logoX = pageW / 2 - logoSize / 2;
     try {
       doc.addImage(school.logo, 'PNG', logoX, y, logoSize, logoSize);
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
     y += logoSize + 2;
   }
 
-  y += 6;
+  y += 5;
 
   doc.setFont('times', 'bold');
   doc.setFontSize(20);
@@ -91,7 +93,7 @@ export async function generateReportCard({ student, report, term, school }) {
   doc.text('— END OF TERM REPORT —', pageW / 2, y + 6, { align: 'center' });
   y += 10.5;
 
-  // Biodata
+  // Biodata (sans POSITION)
   doc.setFillColor(...colors.paper);
   doc.setDrawColor(217, 205, 166);
   doc.setLineWidth(0.3);
@@ -125,22 +127,20 @@ export async function generateReportCard({ student, report, term, school }) {
   doc.setTextColor(...colors.inkSoft);
   doc.text('DATE OF BIRTH:', 18, y + 16.5);
   doc.text('TERM:', 110, y + 16.5);
-  doc.text('POSITION:', 160, y + 16.5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.setTextColor(...colors.ink);
   doc.text(formatDate(student.date_of_birth), 18, y + 20.5);
   doc.text(term.name || '—', 110, y + 20.5);
-  doc.text(report.rank ? String(report.rank) : '—', 160, y + 20.5);
 
-  y += 28;
+  y += 26;
 
-  // ── Tableau des notes (avec mise à l'échelle pour l'affichage) ──
+  // ── Tableau des notes (avec colonne POS) ──
   const isJhs = student.class && student.class.toUpperCase().includes('JHS');
   const headRow = isJhs
-    ? ['Subject', 'CLASS (30)', 'EXAM (70)', 'TOTAL (100)', 'GRADE', 'REMARKS']
-    : ['Subject', 'S.B.A (50)', 'EXAM (50)', 'TOTAL (100)', 'GRADE', 'REMARKS'];
+    ? ['Subject', 'CLASS (30)', 'EXAM (70)', 'TOTAL (100)', 'GRADE', 'POS', 'REMARKS']
+    : ['Subject', 'S.B.A (50)', 'EXAM (50)', 'TOTAL (100)', 'GRADE', 'POS', 'REMARKS'];
 
   const tableData = report.subjects.map(function(sub) {
     let sbaDisplay = '—';
@@ -151,14 +151,14 @@ export async function generateReportCard({ student, report, term, school }) {
     const endRaw = (sub.endTermScore !== null && sub.endTermScore !== undefined) ? sub.endTermScore : null;
 
     if (isJhs) {
-      // JHS : CLASS (30) = mid * 0.3, EXAM (70) = end * 0.7
       sbaDisplay = (midRaw !== null) ? (midRaw * 0.3).toFixed(1) : '—';
       examDisplay = (endRaw !== null) ? (endRaw * 0.7).toFixed(1) : '—';
     } else {
-      // Primaire : diviser par 2 car stocké sur 100
       sbaDisplay = (midRaw !== null) ? (midRaw / 2).toFixed(1) : '—';
       examDisplay = (endRaw !== null) ? (endRaw / 2).toFixed(1) : '—';
     }
+
+    const pos = (sub.pos !== null && sub.pos !== undefined) ? sub.pos : '—';
 
     return [
       sub.subjectName,
@@ -166,6 +166,7 @@ export async function generateReportCard({ student, report, term, school }) {
       examDisplay,
       totalDisplay,
       sub.gradeLetter || '—',
+      pos,
       sub.remarks || '—'
     ];
   });
@@ -186,7 +187,7 @@ export async function generateReportCard({ student, report, term, school }) {
     },
     bodyStyles: {
       font: 'helvetica',
-      fontSize: 10,
+      fontSize: 9,
       textColor: colors.ink,
       lineColor: [217, 205, 166],
       lineWidth: 0.1,
@@ -198,24 +199,69 @@ export async function generateReportCard({ student, report, term, school }) {
       2: { halign: 'center' },
       3: { halign: 'center', fontStyle: 'bold' },
       4: { halign: 'center', fontStyle: 'bold' },
-      5: { halign: 'left' }
+      5: { halign: 'center' },
+      6: { halign: 'left' }
     },
-    alternateRowStyles: { fillColor: colors.paper },
-    foot: [
-      ['OVERALL PERFORMANCE', '', '', 'Avg: ' + (report.overallAverage ? report.overallAverage.toFixed(2) : '—') + '%', '', '']
-    ],
-    footStyles: {
-      fillColor: colors.navyLight,
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      fontSize: 10
-    },
-    margin: { left: 14, right: 14 }
+    alternateRowStyles: { fillColor: colors.paper }
   });
 
-  y = doc.lastAutoTable.finalY + 6;
+  y = doc.lastAutoTable.finalY + 3;
 
-  // Attendance
+  // ── TABLEAU DE BORD (PERFORMANCE SUMMARY) – nouvelle version en bannière ──
+  const totalAllSubjects = report.subjects.reduce((sum, sub) => {
+    if (sub.average !== null) return sum + sub.average;
+    return sum;
+  }, 0);
+
+  const avgScore = report.overallAverage !== null ? report.overallAverage : null;
+  const position = report.rank || '—';
+  const roll = report.numberOnRoll ?? '—';
+
+  // Paramètres de la bannière
+  const boxHeight = 18; 
+  const colW = contentW / 4;
+
+  // Fond principal bleu marine
+  doc.setFillColor(...colors.navy);
+  doc.roundedRect(marginX, y, contentW, boxHeight, 2.5, 2.5, 'F');
+
+  // Données
+  const metrics = [
+    { label: 'TOTAL SCORE', value: totalAllSubjects > 0 ? totalAllSubjects.toFixed(1) : '—' },
+    { label: 'OVERALL AVERAGE', value: avgScore !== null ? avgScore.toFixed(2) + '%' : '—' },
+    { label: 'POSITION IN CLASS', value: position },
+    { label: 'TOTAL ON ROLL', value: roll }
+  ];
+
+  // Dessin des textes et séparateurs
+  metrics.forEach((metric, index) => {
+    const centerX = marginX + (index * colW) + (colW / 2);
+
+    // Titre (petit, or)
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(...colors.gold);
+    doc.text(metric.label, centerX, y + 6.5, { align: 'center' });
+
+    // Valeur (grand, blanc)
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.setTextColor(255, 255, 255);
+    doc.text(String(metric.value), centerX, y + 14.5, { align: 'center' });
+
+    // Séparateur vertical (sauf dernière)
+    if (index < 3) {
+      const lineX = marginX + ((index + 1) * colW);
+      doc.setDrawColor(...colors.gold);
+      doc.setLineWidth(0.3);
+      doc.line(lineX, y + 4, lineX, y + 14);
+    }
+  });
+
+  // Mise à jour du curseur Y
+  y += boxHeight + 6;
+
+  // ── ATTENDANCE RECORD ──
   if (report.attendance) {
     const a = report.attendance;
     const presenceRate = a.total > 0 ? ((a.present / a.total) * 100).toFixed(1) : '0.0';
@@ -231,17 +277,37 @@ export async function generateReportCard({ student, report, term, school }) {
     doc.text('ATTENDANCE RECORD:', 18, y + 6);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9.5);
+    doc.setFontSize(10);
     doc.setTextColor(...colors.navy);
     doc.text('School Opened: ' + a.total + ' days', 18, y + 11);
     doc.text('Times Present: ' + a.present, 65, y + 11);
     doc.text('Times Absent: ' + a.absent, 110, y + 11);
     doc.text('Attendance Rate: ' + presenceRate + '%', 155, y + 11);
 
-    y += 20;
+    y += 17;
   }
 
-  // Remarks
+  // ── PROMOTED TO ──
+  if (report.promotedTo) {
+    y += 5;
+    const label = 'PROMOTED TO:';
+    const value = report.promotedTo;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(...colors.ink);
+    const labelWidth = doc.getTextWidth(label);
+    doc.text(label, 18, y);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...colors.navy);
+    doc.text(value, 18 + labelWidth + 2, y);
+    y += 5;
+  }
+
+  // Espace avant les remarques
+  y += 4;
+
+  // ── CLASS TEACHER'S REMARK / SCHOOL MANAGER'S REMARK ──
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(...colors.navy);
@@ -257,7 +323,7 @@ export async function generateReportCard({ student, report, term, school }) {
 
   y += 20;
 
-  // Signatures
+  // ── Signatures (enseignant + manager) ──
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(...colors.inkSoft);
@@ -270,22 +336,7 @@ export async function generateReportCard({ student, report, term, school }) {
 
   y += 12;
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(...colors.navy);
-  doc.text("PARENT'S / GUARDIAN'S SIGNATURE", pageW / 2, y, { align: 'center' });
-
-  y += 12;
-  doc.setDrawColor(...colors.gold);
-  doc.line(pageW / 2 - 40, y, pageW / 2 + 40, y);
-
-  y += 5;
-  doc.setFont('helvetica', 'italic');
-  doc.setFontSize(7.5);
-  doc.setTextColor(...colors.inkSoft);
-  doc.text('(Please sign and return this report to the school)', pageW / 2, y, { align: 'center' });
-
-  y += 6;
+  // ── Le bloc "PARENT'S / GUARDIAN'S SIGNATURE" est supprimé ──
 
   // Vacation dates
   if (school && (school.vacationStart || school.resumption)) {
