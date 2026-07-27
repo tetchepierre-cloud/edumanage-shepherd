@@ -1,6 +1,7 @@
 // src/lib/kgReportCardGenerator.js (École 2 – Shepherd Mirrors Academy)
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
+import { getOpaqueSignaturePNG, fitWithinBox } from './imageUtils';
 
 jsPDF.autoTable = autoTable;
 
@@ -116,11 +117,11 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
 
   y += Math.max(logoSize, boxSize) + 4;
 
-  // Biodata
+  // ── Biodata (sans les lignes d'assiduité) ──
   doc.setFillColor(...colors.paper);
   doc.setDrawColor(217, 205, 166);
   doc.setLineWidth(0.3);
-  doc.roundedRect(marginX, y, contentW, 28, 2, 2, 'FD');
+  doc.roundedRect(marginX, y, contentW, 22, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
@@ -150,32 +151,7 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
   doc.text(report.academicYear || '—', 110, y + 20.5);
   doc.text(report.sex || '—', 160, y + 20.5);
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(...colors.inkSoft);
-  doc.text('TOTAL ATTENDANCE:', marginX + 4, y + 26);
-  doc.text("PUPIL'S ATTENDANCE:", 110, y + 26);
-  doc.text('TOTAL ABSENCES:', 160, y + 26);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(...colors.ink);
-
-  const getTextWidth = (text) => {
-    const fontSize = doc.internal.getFontSize();
-    const width = doc.getStringUnitWidth(text) * fontSize / doc.internal.scaleFactor;
-    return width;
-  };
-
-  const x1 = marginX + 4 + getTextWidth('TOTAL ATTENDANCE:') + 2;
-  const x2 = 110 + getTextWidth("PUPIL'S ATTENDANCE:") + 2;
-  const x3 = 160 + getTextWidth('TOTAL ABSENCES:') + 2;
-
-  doc.text(String(report.attendance?.total || '—'), x1, y + 26);
-  doc.text(String(report.attendance?.present || '—'), x2, y + 26);
-  doc.text(String(report.attendance?.absent || '—'), x3, y + 26);
-
-  let currentY = y + 32;
+  let currentY = y + 26;
 
   // Titre de la section
   doc.setFillColor(...colors.navy);
@@ -384,7 +360,33 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
 
     currentY = doc.lastAutoTable.finalY + 6;
 
-    // ── BLOC DE SYNTHÈSE QUALITATIVE (corrigé) ──
+    // ── ATTENDANCE RECORD (déplacé ici) ──
+    if (report.attendance) {
+      const a = report.attendance;
+      const presenceRate = a.total > 0 ? ((a.present / a.total) * 100).toFixed(1) : '0.0';
+
+      doc.setFillColor(...colors.paper);
+      doc.setDrawColor(217, 205, 166);
+      doc.roundedRect(marginX, currentY, contentW, 14, 2, 2, 'FD');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(...colors.inkSoft);
+
+      doc.text('ATTENDANCE RECORD:', marginX + 4, currentY + 6);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(...colors.navy);
+      doc.text('School Opened: ' + a.total + ' days', marginX + 4, currentY + 11);
+      doc.text('Times Present: ' + a.present, 65, currentY + 11);
+      doc.text('Times Absent: ' + a.absent, 110, currentY + 11);
+      doc.text('Attendance Rate: ' + presenceRate + '%', 155, currentY + 11);
+
+      currentY += 20;
+    }
+
+    // ── BLOC DE SYNTHÈSE QUALITATIVE ──
     if (report.overallAverage !== undefined && report.overallAverage !== null) {
       const avg = parseFloat(report.overallAverage);
 
@@ -437,23 +439,18 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
 
         const genderedComment = replacePronouns(commentText);
 
-        // ── Configuration visuelle (correction définitive) ──
+        // ── Configuration visuelle ──
         const boxPad = 6;
         const maxTextWidth = contentW - (boxPad * 2);
 
-        // 1. CRITIQUE : Définir la police FINALE avant de couper le texte
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(10.5);
 
-        // 2. Couper le texte (jsPDF utilisera l'encombrement du Helvetica Bold)
         const splitText = doc.splitTextToSize(genderedComment, maxTextWidth);
-        
-        // 3. Calculer la hauteur dynamiquement
         const lineHeight = 5;
         const textHeight = splitText.length * lineHeight;
         const boxH = 15 + textHeight;
 
-        // Fond crème et bordure dorée
         doc.setFillColor(253, 251, 244);
         doc.setDrawColor(...colors.gold);
         doc.setLineWidth(0.4);
@@ -475,7 +472,7 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
         doc.setLineWidth(0.2);
         doc.line(marginX + boxPad, currentY + 8.5, pageW - marginX - boxPad, currentY + 8.5);
 
-        // Ligne 2 : Commentaire (avec le texte coupé)
+        // Ligne 2 : Commentaire
         doc.setTextColor(0, 0, 0);
         doc.text(splitText, marginX + boxPad, currentY + 13.5);
 
@@ -491,9 +488,8 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
     currentY += 6;
   }
 
-  // ── PROMOTED TO, CONDUCT, ATTITUDE (sur la même ligne) ──
+  // ── PROMOTED TO (gauche) et ATTITUDE (centre) – CONDUCT supprimé ──
   const promotedValue = report.promotedTo && report.promotedTo !== '—' ? report.promotedTo : '—';
-  const conductValue = report.conduct || '—';
   const attitudeValue = report.attitude || '—';
 
   currentY += 4;
@@ -511,33 +507,20 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
   doc.setTextColor(...colors.navy);
   doc.text(promotedValue, xLeft + labelWidthPromoted + 2, currentY);
 
-  // Conduct (centre)
-  const labelConduct = 'CONDUCT:';
-  const xCenter = pageW / 2 - doc.getTextWidth(labelConduct + ' ' + conductValue) / 2;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
-  doc.setTextColor(...colors.ink);
-  doc.text(labelConduct, xCenter, currentY);
-  const labelWidthConduct = doc.getTextWidth(labelConduct);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(...colors.navy);
-  doc.text(conductValue, xCenter + labelWidthConduct + 2, currentY);
-
-  // Attitude (droite)
+  // Attitude (centre)
   const labelAttitude = 'ATTITUDE:';
-  const xRight = pageW - marginX - doc.getTextWidth(labelAttitude + ' ' + attitudeValue);
+  const xCenter = pageW / 2 - doc.getTextWidth(labelAttitude + ' ' + attitudeValue) / 2;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   doc.setTextColor(...colors.ink);
-  doc.text(labelAttitude, xRight, currentY);
+  doc.text(labelAttitude, xCenter, currentY);
   const labelWidthAttitude = doc.getTextWidth(labelAttitude);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(...colors.navy);
-  doc.text(attitudeValue, xRight + labelWidthAttitude + 2, currentY);
+  doc.text(attitudeValue, xCenter + labelWidthAttitude + 2, currentY);
 
-  currentY += 12;
+  currentY += 15;
 
   // ── Remarques et signatures ──
   const boxW = (contentW - 6) / 2;
@@ -557,11 +540,52 @@ export async function generateKgReportCard({ studentId, termId, className, schoo
 
   doc.setFontSize(8);
   doc.setTextColor(...colors.inkSoft);
-  doc.line(marginX, currentY, marginX + boxW, currentY);
-  doc.text('Teacher’s Signature & Date', marginX, currentY + 4);
 
-  doc.line(marginX + boxW + 6, currentY, pageW - marginX, currentY);
-  doc.text('School Manager’s Signature, Date & Stamp', marginX + boxW + 6, currentY + 4);
+  // Signature de l'enseignant
+  doc.line(marginX, currentY, marginX + boxW, currentY);
+  doc.text('Signature', marginX, currentY + 4);
+
+  // Configuration des coordonnées pour le Manager
+  const lineX = marginX + boxW + 6;
+  const lineY = currentY;
+  const endX = pageW - marginX;
+
+  // 1. TOUJOURS dessiner la couche de base (ligne et texte)
+  doc.line(lineX, lineY, endX, lineY);
+  doc.text('Signature & Stamp', lineX, lineY + 4);
+
+  // 2. Dessiner la signature par‑dessus (transparente)
+  if (school?.signature) {
+    try {
+      // Traitement automatique du fond blanc
+      const { dataUrl, width, height } = await getOpaqueSignaturePNG(school.signature);
+      const maxSigWidth = (endX - lineX) * 0.99;
+      const maxSigHeight = 18;
+      const size = fitWithinBox(width, height, maxSigWidth, maxSigHeight);
+
+      doc.addImage(
+        dataUrl,
+        'PNG',
+        lineX + (endX - lineX - size.width) / 2,
+        lineY - size.height + 2,
+        size.width,
+        size.height
+      );
+    } catch (e) {
+      console.warn("Signature non affichée :", e);
+    }
+  }
+
+  // ── Ajout de la date d'impression ──
+  const printDate = new Date().toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(...colors.inkSoft);
+  doc.text('Date of Issue: ' + printDate, marginX, lineY + 10);
 
   // ── Le bloc "PARENT'S / GUARDIAN'S SIGNATURE" est supprimé ──
 

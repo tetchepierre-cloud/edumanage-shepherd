@@ -58,7 +58,7 @@ export default function ReportCardPage() {
     const { data } = await supabase.from('app_settings').select('*');
     const cfg = {};
     data?.forEach(d => { cfg[d.key] = d.value; });
-    setTotalSchoolDays(parseInt(cfg.total_school_days) || 65);
+    const signature = cfg.school_manager_signature || null;
     setSchool({
       name:    cfg.school_name || 'School',
       address: cfg.address     || '',
@@ -67,7 +67,9 @@ export default function ReportCardPage() {
       logo:    cfg.logo        || null,
       vacationStart: cfg.vacation_start_date || '',
       resumption:   cfg.resumption_date     || '',
+      signature: signature
     });
+    setTotalSchoolDays(parseInt(cfg.total_school_days) || 65);
   };
 
   useEffect(() => {

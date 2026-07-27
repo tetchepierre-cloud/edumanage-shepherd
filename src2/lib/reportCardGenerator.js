@@ -1,6 +1,7 @@
 // src/lib/reportCardGenerator.js (École 2 – Shepherd Mirrors Academy)
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
+import { getOpaqueSignaturePNG, fitWithinBox } from './imageUtils';
 
 jsPDF.autoTable = autoTable;
 
@@ -207,7 +208,7 @@ export async function generateReportCard({ student, report, term, school }) {
 
   y = doc.lastAutoTable.finalY + 3;
 
-  // ── TABLEAU DE BORD (PERFORMANCE SUMMARY) – nouvelle version en bannière ──
+  // ── TABLEAU DE BORD (PERFORMANCE SUMMARY) – bannière bleue ──
   const totalAllSubjects = report.subjects.reduce((sum, sub) => {
     if (sub.average !== null) return sum + sub.average;
     return sum;
@@ -217,15 +218,12 @@ export async function generateReportCard({ student, report, term, school }) {
   const position = report.rank || '—';
   const roll = report.numberOnRoll ?? '—';
 
-  // Paramètres de la bannière
   const boxHeight = 18; 
   const colW = contentW / 4;
 
-  // Fond principal bleu marine
   doc.setFillColor(...colors.navy);
   doc.roundedRect(marginX, y, contentW, boxHeight, 2.5, 2.5, 'F');
 
-  // Données
   const metrics = [
     { label: 'TOTAL SCORE', value: totalAllSubjects > 0 ? totalAllSubjects.toFixed(1) : '—' },
     { label: 'OVERALL AVERAGE', value: avgScore !== null ? avgScore.toFixed(2) + '%' : '—' },
@@ -233,23 +231,19 @@ export async function generateReportCard({ student, report, term, school }) {
     { label: 'TOTAL ON ROLL', value: roll }
   ];
 
-  // Dessin des textes et séparateurs
   metrics.forEach((metric, index) => {
     const centerX = marginX + (index * colW) + (colW / 2);
 
-    // Titre (petit, or)
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(...colors.gold);
     doc.text(metric.label, centerX, y + 6.5, { align: 'center' });
 
-    // Valeur (grand, blanc)
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(15);
     doc.setTextColor(255, 255, 255);
     doc.text(String(metric.value), centerX, y + 14.5, { align: 'center' });
 
-    // Séparateur vertical (sauf dernière)
     if (index < 3) {
       const lineX = marginX + ((index + 1) * colW);
       doc.setDrawColor(...colors.gold);
@@ -258,7 +252,6 @@ export async function generateReportCard({ student, report, term, school }) {
     }
   });
 
-  // Mise à jour du curseur Y
   y += boxHeight + 6;
 
   // ── ATTENDANCE RECORD ──
@@ -304,7 +297,6 @@ export async function generateReportCard({ student, report, term, school }) {
     y += 5;
   }
 
-  // Espace avant les remarques
   y += 4;
 
   // ── CLASS TEACHER'S REMARK / SCHOOL MANAGER'S REMARK ──
@@ -328,11 +320,51 @@ export async function generateReportCard({ student, report, term, school }) {
   doc.setFontSize(8);
   doc.setTextColor(...colors.inkSoft);
 
+  // Signature de l'enseignant
   doc.line(14, y, pageW / 2 - 10, y);
-  doc.text('Signature & Date', 14, y + 4);
+  doc.text('Signature', 14, y + 4);
 
-  doc.line(pageW / 2 + 10, y, pageW - 14, y);
-  doc.text('Signature, Stamp & Date', pageW / 2 + 10, y + 4);
+  // Configuration des coordonnées pour le Manager
+  const lineX = pageW / 2 + 10;
+  const lineY = y;
+  const endX = pageW - 14;
+
+  // 1. TOUJOURS dessiner la couche de base (ligne et texte)
+  doc.line(lineX, lineY, endX, lineY);
+  doc.text('Signature & Stamp', lineX, lineY + 4);
+
+  // 2. Dessiner la signature par‑dessus (transparente)
+  if (school?.signature) {
+    try {
+      // Traitement automatique du fond blanc
+      const { dataUrl, width, height } = await getOpaqueSignaturePNG(school.signature);
+      const maxSigWidth = (endX - lineX) * 0.99;
+      const maxSigHeight = 18;
+      const size = fitWithinBox(width, height, maxSigWidth, maxSigHeight);
+
+      doc.addImage(
+        dataUrl,
+        'PNG',
+        lineX + (endX - lineX - size.width) / 2,
+        lineY - size.height + 2,
+        size.width,
+        size.height
+      );
+    } catch (e) {
+      console.warn("Signature non affichée :", e);
+    }
+  }
+
+  // ── Ajout de la date d'impression ──
+  const printDate = new Date().toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(...colors.inkSoft);
+  doc.text('Date of Issue: ' + printDate, 14, lineY + 10);
 
   y += 12;
 
@@ -366,22 +398,13 @@ export async function generateReportCard({ student, report, term, school }) {
     y += 14;
   }
 
-  // Footer
+  // ── Footer (filigrane déplacé ici) ──
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
+  doc.setFontSize(8);
   doc.setTextColor(160, 160, 160);
-  doc.text('This report remains the property of the school.', pageW / 2, pageH - 4, { align: 'center' });
+  doc.text('Powered by EduManage GH  •  +233 59 643 8500', pageW / 2, pageH - 4, { align: 'center' });
 
-  // Watermark
-  doc.saveGraphicsState();
-  doc.setGState(new doc.GState({ opacity: 0.3 }));
-  doc.setFontSize(8.5);
-  doc.setTextColor(70, 70, 70);
-  doc.setFont('helvetica', 'normal');
-  var textStr = 'Powered by EduManage GH  •  +233 59 643 8500';
-  var textWidth = doc.getTextWidth(textStr);
-  doc.text(textStr, 5, pageH / 2 + textWidth / 2, { angle: 90 });
-  doc.restoreGraphicsState();
+  // Le watermark original a été supprimé et remplacé par le footer ci-dessus.
 
   window.open(URL.createObjectURL(doc.output('blob')), '_blank');
 }

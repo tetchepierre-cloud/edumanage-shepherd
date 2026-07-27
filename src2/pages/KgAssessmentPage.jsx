@@ -84,6 +84,7 @@ export default function KgAssessmentPage() {
     const { data } = await supabase.from('app_settings').select('*');
     const cfg = {};
     data?.forEach(d => { cfg[d.key] = d.value; });
+    const signature = cfg.school_manager_signature || null;
     setSchool({ 
       name: cfg.school_name || 'School', 
       address: cfg.address || '', 
@@ -91,7 +92,8 @@ export default function KgAssessmentPage() {
       email: cfg.email || cfg.school_email || '', 
       logo: cfg.logo || null,
       vacationStart: cfg.vacation_start_date || '',
-      resumption: cfg.resumption_date || ''
+      resumption: cfg.resumption_date || '',
+      signature: signature
     });
     setExamMode(cfg.kg_exam_mode === 'simple' ? 'simple' : 'detailed');
     setTotalSchoolDays(parseInt(cfg.total_school_days) || 65);
