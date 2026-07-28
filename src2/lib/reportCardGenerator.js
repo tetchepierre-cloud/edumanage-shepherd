@@ -1,7 +1,6 @@
 // src/lib/reportCardGenerator.js (École 2 – Shepherd Mirrors Academy)
 import jsPDF from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
-import { getOpaqueSignaturePNG, fitWithinBox } from './imageUtils';
 
 jsPDF.autoTable = autoTable;
 
@@ -333,28 +332,6 @@ export async function generateReportCard({ student, report, term, school }) {
   doc.line(lineX, lineY, endX, lineY);
   doc.text('Signature & Stamp', lineX, lineY + 4);
 
-  // 2. Dessiner la signature par‑dessus (transparente)
-  if (school?.signature) {
-    try {
-      // Traitement automatique du fond blanc
-      const { dataUrl, width, height } = await getOpaqueSignaturePNG(school.signature);
-      const maxSigWidth = (endX - lineX) * 0.99;
-      const maxSigHeight = 18;
-      const size = fitWithinBox(width, height, maxSigWidth, maxSigHeight);
-
-      doc.addImage(
-        dataUrl,
-        'PNG',
-        lineX + (endX - lineX - size.width) / 2,
-        lineY - size.height + 2,
-        size.width,
-        size.height
-      );
-    } catch (e) {
-      console.warn("Signature non affichée :", e);
-    }
-  }
-
   // ── Ajout de la date d'impression ──
   const printDate = new Date().toLocaleDateString('en-GB', {
     day: 'numeric',
@@ -402,7 +379,8 @@ export async function generateReportCard({ student, report, term, school }) {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(160, 160, 160);
-  doc.text('Powered by EduManage GH  •  +233 59 643 8500', pageW / 2, pageH - 4, { align: 'center' });
+  // Remonté de pageH - 4 à pageH - 6
+  doc.text('Powered by EduManage GH  •  +233 59 643 8500', pageW / 2, pageH - 6, { align: 'center' });
 
   // Le watermark original a été supprimé et remplacé par le footer ci-dessus.
 
