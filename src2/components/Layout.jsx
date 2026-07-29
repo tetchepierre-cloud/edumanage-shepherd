@@ -10,7 +10,7 @@ import {
   Menu, X, GraduationCap, DollarSign, FileText,
   Calendar, ClipboardCheck, ThumbsUp, PenTool,
   Award, Baby, FlaskConical, BarChart3, School,
-  FileSpreadsheet
+  FileSpreadsheet, MessageSquare
 } from 'lucide-react'
 
 const allNavItems = [
@@ -35,6 +35,7 @@ const allNavItems = [
   // Administration
   { to: '/audit',      icon: ClipboardList,    label: 'Audit',      group: 'Admin', module: 'audit' },
   { to: '/settings',   icon: Settings,         label: 'Settings',   group: 'Admin', module: 'settings' },
+  { to: '/sms',        icon: MessageSquare,    label: 'SMS',        group: 'Admin', module: 'sms' },
   { to: '/ges-report', icon: FileSpreadsheet,  label: 'GES Report', group: 'Admin', module: 'ges-report' },
 ];
 
@@ -50,14 +51,16 @@ export default function Layout() {
     if (!profile?.role) return
     supabase
       .from('module_access')
-      .select('module, can_read')
+      .select('*')  // ← correction : on sélectionne toutes les colonnes
       .eq('role', profile.role)
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) throw error
         const perms = {}
         ;(data || []).forEach(p => { perms[p.module] = p.can_read })
         setPermissions(perms)
       })
       .catch(() => {
+        // Fallback : toutes les permissions à true
         const all = {}
         allNavItems.forEach(item => { if (item.module) all[item.module] = true })
         setPermissions(all)
