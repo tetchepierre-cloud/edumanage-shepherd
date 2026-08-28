@@ -94,6 +94,10 @@ export default function FeesPage() {
   const [showClassBalanceModal, setShowClassBalanceModal] = useState(false)
   const [selectedBalanceClass, setSelectedBalanceClass] = useState('')
   const [selectedBalanceYear, setSelectedBalanceYear] = useState('2025/2026')
+  
+  // États pour la modale OUTSTANDING
+  const [showOutstandingModal, setShowOutstandingModal] = useState(false);
+  const [outstandingYear, setOutstandingYear] = useState('2025/2026');
   const [outstandingFilterPercent, setOutstandingFilterPercent] = useState(0);
   
   useEffect(() => { fetchAll(); loadSchoolConfig() }, [])
@@ -166,21 +170,36 @@ export default function FeesPage() {
 
   // === FONCTIONS POUR LE TERME ===
   const getExpectedFeeItems = async (studentId, academicYear, term) => {
+    // 1. Récupérer la classe actuelle de l'élève (pour 2026/2027)
     const { data: student, error: studentErr } = await supabase
       .from('students')
-      .select('class_id, classes(name)')
+      .select('class_id, classes(level_id, levels(name, sort_order))')
       .eq('id', studentId)
       .single()
-    if (studentErr || !student?.classes) return []
-    const className = student.classes.name.trim()
-    const levelName = className.replace(/\s+[A-Za-z]$/, '').trim()
-    const { data: levelData, error: levelErr } = await supabase
+    if (studentErr || !student?.classes?.levels) return []
+
+    const currentLevelSortOrder = student.classes.levels.sort_order
+
+    // 2. Calculer l'écart d'années entre l'année demandée et l'année en cours (2026/2027)
+    const currentYearStart = parseInt('2026/2027'.split('/')[0]) // 2026
+    const requestedYearStart = parseInt(academicYear.split('/')[0]) // ex: 2025
+    const yearOffset = currentYearStart - requestedYearStart // 2026 - 2025 = 1
+
+    // 3. Niveau historique = sort_order actuel - écart (car promotion systématique)
+    const historicalSortOrder = currentLevelSortOrder - yearOffset
+
+    // 4. Récupérer l'ID du niveau historique
+    const { data: historicalLevel, error: levelErr } = await supabase
       .from('levels')
       .select('id')
-      .ilike('name', levelName)
-      .maybeSingle()
-    if (levelErr || !levelData) return []
-    const levelId = levelData.id
+      .eq('sort_order', historicalSortOrder)
+      .single()
+
+    if (levelErr || !historicalLevel) return []
+
+    // 5. Utiliser cet ID pour charger les frais de l'année demandée
+    const levelId = historicalLevel.id
+
     let query = supabase
       .from('fee_structure')
       .select('id, fee_name, fee_type, amount, is_mandatory, required_for_admission')
@@ -608,26 +627,13 @@ export default function FeesPage() {
           <CanAct module="fees" section="header" element="Class Balance button"><button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Class Balance Report">📊 Class Balance</button></CanAct>
           
           <CanAct module="fees" section="header" element="Outstanding Balances button">
-            <div className="flex items-center gap-1">
-              <select
-                value={outstandingFilterPercent}
-                onChange={e => setOutstandingFilterPercent(Number(e.target.value))}
-                className="border border-gray-300 rounded-lg px-2 py-2 text-sm bg-white"
-              >
-                <option value={0}>Any balance</option>
-                <option value={25}>≥ 25%</option>
-                <option value={50}>≥ 50%</option>
-                <option value={75}>≥ 75%</option>
-                <option value={100}>100%</option>
-              </select>
-              <button
-                onClick={() => generateOutstandingReport(outstandingFilterPercent)}
-                className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
-                title="Outstanding Balances Report"
-              >
-                📋 Outstanding
-              </button>
-            </div>
+            <button
+              onClick={() => setShowOutstandingModal(true)}
+              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+              title="Outstanding Balances Report"
+            >
+              📋 Outstanding
+            </button>
           </CanAct>
 
         </div>
@@ -678,6 +684,63 @@ export default function FeesPage() {
 
       {showClassBalanceModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-md"><div className="p-6 border-b flex items-center justify-between"><h3 className="text-lg font-bold text-gray-900">📊 Class Balance Report</h3><button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button></div><div className="p-6 space-y-4"><div><label className="block text-sm font-medium text-gray-700 mb-1">Class</label><select value={selectedBalanceClass} onChange={e => setSelectedBalanceClass(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">-- Select Class --</option>{classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label><select value={selectedBalanceYear} onChange={e => setSelectedBalanceYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">{ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label><select value={balanceReportTerm} onChange={e => setBalanceReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Terms</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></div><button onClick={async () => { if (!selectedBalanceClass) return; setShowClassBalanceModal(false); const className = classes.find(c => c.id === selectedBalanceClass)?.name || 'Class'; await generateClassBalanceReport({ className, classId: selectedBalanceClass, academicYear: selectedBalanceYear, schoolConfig, term: balanceReportTerm || null }); }} className="w-full bg-teal-600 text-white py-2 rounded-lg font-medium hover:bg-teal-700">Generate Report</button></div></div></div>
+      )}
+
+      {/* ── Modal Outstanding ── */}
+      {showOutstandingModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b flex items-center justify-between sticky top-0 bg-white z-10">
+              <h3 className="text-lg font-bold text-gray-900">📋 Outstanding Balances Report</h3>
+              <button onClick={() => setShowOutstandingModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">✕</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+                <select
+                  value={outstandingYear}
+                  onChange={e => setOutstandingYear(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Minimum Outstanding</label>
+                <select
+                  value={outstandingFilterPercent}
+                  onChange={e => setOutstandingFilterPercent(Number(e.target.value))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <option value={0}>Any balance</option>
+                  <option value={25}>≥ 25%</option>
+                  <option value={50}>≥ 50%</option>
+                  <option value={75}>≥ 75%</option>
+                  <option value={100}>100%</option>
+                </select>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowOutstandingModal(false)}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOutstandingModal(false);
+                    generateOutstandingReport(outstandingFilterPercent, outstandingYear);
+                  }}
+                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium text-sm"
+                >
+                  Generate
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

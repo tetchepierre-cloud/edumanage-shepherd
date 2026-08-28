@@ -390,7 +390,6 @@ export default function KgAssessmentPage() {
     const term = terms.find(t => t.id === selectedTerm);
     const className = classes.find(c => c.id === selectedClass)?.name || '';
 
-    // Calcul de l'assiduité avec les valeurs manuelles
     const total = parseInt(totalSchoolDays) || 0;
     const absent = parseInt(absences) || 0;
     const present = Math.max(0, total - absent);
@@ -417,7 +416,7 @@ export default function KgAssessmentPage() {
     });
     const overallAverage = count > 0 ? totalAllSubjects / count : null;
 
-    // ── Calcul du rang (POSITION IN CLASS) ──
+    // ── Calcul du rang (POSITION IN CLASS) avec gestion des ex-aequo ──
     let rank = null;
     if (selectedClass && selectedTerm) {
       const { data: classResults, error: rankError } = await supabase
@@ -427,6 +426,7 @@ export default function KgAssessmentPage() {
         .eq('term_id', selectedTerm)
         .not('total', 'is', null);
       if (!rankError && classResults) {
+        // Grouper par étudiant et calculer la moyenne de tous les totaux
         const studentTotals = {};
         const studentCount = {};
         classResults.forEach(r => {
@@ -441,11 +441,19 @@ export default function KgAssessmentPage() {
           student_id: id,
           avg: studentTotals[id] / studentCount[id]
         }));
+        // Trier par moyenne décroissante
         averages.sort((a, b) => b.avg - a.avg);
-        const currentAvg = averages.find(a => a.student_id === selectedStudent.id);
-        if (currentAvg) {
-          rank = averages.findIndex(a => a.student_id === selectedStudent.id) + 1;
+        
+        // Attribuer les rangs séquentiels avec gestion des ex-aequo
+        const rankMap = {};
+        let currentRank = 1;
+        for (let i = 0; i < averages.length; i++) {
+          if (i > 0 && averages[i].avg < averages[i-1].avg) {
+            currentRank = i + 1;
+          }
+          rankMap[averages[i].student_id] = currentRank;
         }
+        rank = rankMap[selectedStudent.id] || null;
       }
     }
 

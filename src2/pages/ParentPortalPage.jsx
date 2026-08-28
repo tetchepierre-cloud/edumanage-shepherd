@@ -505,7 +505,7 @@ export default function ParentPortalPage() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-              <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0538777840" className="w-full border rounded-lg px-3 py-2 text-sm" required />
+              <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0596438500" className="w-full border rounded-lg px-3 py-2 text-sm" required />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
@@ -526,7 +526,7 @@ export default function ParentPortalPage() {
           <form onSubmit={handleSendOtp} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-              <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0538777840" className="w-full border rounded-lg px-3 py-2 text-sm" required />
+              <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0596438500" className="w-full border rounded-lg px-3 py-2 text-sm" required />
             </div>
             <button type="submit" disabled={loading || !phone} className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2">
               <Smartphone size={16} /> {loading ? 'Sending...' : 'Send OTP by SMS'}

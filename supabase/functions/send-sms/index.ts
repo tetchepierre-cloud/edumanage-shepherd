@@ -4,7 +4,7 @@ import { serve } from "https://deno.land/std@0.170.0/http/server.ts";
 const CLIENT_ID = Deno.env.get("HUBTEL_CLIENT_ID")!;
 const CLIENT_SECRET = Deno.env.get("HUBTEL_CLIENT_SECRET")!;
 const SENDER_ID = Deno.env.get("HUBTEL_SENDER_ID") || "EduManage";
-const HUBTEL_API_URL = "https://smsc.hubtel.com/v1/messages/send";
+const HUBTEL_API_URL = "https://sms.hubtel.com/v1/messages/send";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',

@@ -7,7 +7,6 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const HUBTEL_CLIENT_ID = Deno.env.get("HUBTEL_CLIENT_ID")!;
 const HUBTEL_CLIENT_SECRET = Deno.env.get("HUBTEL_CLIENT_SECRET")!;
 const HUBTEL_SENDER_ID = Deno.env.get("HUBTEL_SENDER_ID") || "EduManage";
-const HUBTEL_QUICK_SEND_URL = "https://smsc.hubtel.com/v1/messages/send";
 
 const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
@@ -43,7 +42,6 @@ serve(async (req: Request) => {
 
     const fakeEmail = `${cleaned}@parent.edumanage.gh`;
 
-    // ── ACTION 1 : send-otp ──
     if (action === "send-otp") {
       const { data: students, error: studentError } = await supabaseAdmin
         .from("students")
@@ -52,7 +50,7 @@ serve(async (req: Request) => {
         .limit(1);
 
       if (studentError) {
-        console.error("Erreur de base de données lors de la recherche de l'élève :", studentError);
+        console.error("Erreur de base de données :", studentError);
       }
 
       const student = students && students.length > 0 ? students[0] : null;
@@ -73,38 +71,69 @@ serve(async (req: Request) => {
         .eq("phone", cleaned)
         .eq("used", false);
 
-      // ── MODIFICATION 1 : 'code' → 'otp' ──
       await supabaseAdmin.from("parent_otp").insert({
         phone: cleaned,
-        otp: otp,                // <-- ICI : remplacé code par otp
+        otp: otp,
         expires_at: expiresAt,
         used: false,
       });
 
-      const smsParams = new URLSearchParams({
-        clientid: HUBTEL_CLIENT_ID,
-        clientsecret: HUBTEL_CLIENT_SECRET,
-        from: HUBTEL_SENDER_ID,
-        to: formattedPhone,
-        content: `Your EduManage verification code is: ${otp}`,
-      });
+      console.log(`[Hubtel] Envoi OTP à ${formattedPhone} ...`);
 
-      await fetch(`${HUBTEL_QUICK_SEND_URL}?${smsParams.toString()}`, { method: "GET" });
+      const authHeader = btoa(`${HUBTEL_CLIENT_ID}:${HUBTEL_CLIENT_SECRET}`);
+
+      let hubtelResponse;
+      try {
+        hubtelResponse = await fetch("https://sms.hubtel.com/v1/messages/send", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Basic ${authHeader}`,
+          },
+          body: JSON.stringify({
+            from: HUBTEL_SENDER_ID,
+            to: formattedPhone,
+            content: `Your EduManage verification code is: ${otp}`,
+            RegisteredDelivery: true,   // 🔥 Demande un DLR
+          }),
+        });
+      } catch (fetchError) {
+        console.error(`[Hubtel] Erreur réseau pour ${formattedPhone} :`, fetchError);
+        return new Response(
+          JSON.stringify({ error: "Impossible de contacter le service SMS." }),
+          { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const responseText = await hubtelResponse.text();
+      console.log(`[Hubtel] Réponse (status ${hubtelResponse.status}) pour ${formattedPhone} : ${responseText}`);
+
+      if (!hubtelResponse.ok) {
+        let errorMsg = "L'envoi du code a échoué.";
+        try {
+          const jsonError = JSON.parse(responseText);
+          if (jsonError.message) errorMsg = jsonError.message;
+        } catch (_) {}
+        return new Response(JSON.stringify({ error: errorMsg }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
       const { data: existingUser } = await supabaseAdmin.auth.admin.listUsers();
       const found = (existingUser?.users || []).find(u => u.email === fakeEmail);
 
-      return new Response(JSON.stringify({
-        success: true,
-        isNewUser: !found,
-        studentName: `${student.first_name} ${student.last_name}`,
-      }), {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          success: true,
+          isNewUser: !found,
+          studentName: `${student.first_name} ${student.last_name}`,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    // ── ACTION 2 : verify-otp ──
+    // ── verify-otp ── (inchangé)
     if (action === "verify-otp") {
       if (!code) {
         return new Response(JSON.stringify({ error: "Missing code" }), {
@@ -113,12 +142,11 @@ serve(async (req: Request) => {
         });
       }
 
-      // ── MODIFICATION 2 : 'code' → 'otp' ──
       const { data: otpRecord } = await supabaseAdmin
         .from("parent_otp")
         .select("*")
         .eq("phone", cleaned)
-        .eq("otp", code)          // <-- ICI : remplacé code par otp
+        .eq("otp", code)
         .eq("used", false)
         .gt("expires_at", new Date().toISOString())
         .maybeSingle();
@@ -138,7 +166,7 @@ serve(async (req: Request) => {
       });
     }
 
-    // ── ACTION 3 : set-password ──
+    // ── set-password ── (inchangé)
     if (action === "set-password") {
       if (!password) {
         return new Response(JSON.stringify({ error: "Missing password" }), {
@@ -161,14 +189,14 @@ serve(async (req: Request) => {
           last_name: cleaned,
         }, { onConflict: "id" });
 
-        return new Response(JSON.stringify({
-          success: true,
-          access_token: signInData.session?.access_token,
-          refresh_token: signInData.session?.refresh_token,
-        }), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            success: true,
+            access_token: signInData.session?.access_token,
+            refresh_token: signInData.session?.refresh_token,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
 
       if (signInError?.message?.includes("Invalid login credentials")) {
@@ -194,14 +222,14 @@ serve(async (req: Request) => {
           last_name: cleaned,
         }, { onConflict: "id" });
 
-        return new Response(JSON.stringify({
-          success: true,
-          access_token: freshSignIn.session?.access_token,
-          refresh_token: freshSignIn.session?.refresh_token,
-        }), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            success: true,
+            access_token: freshSignIn.session?.access_token,
+            refresh_token: freshSignIn.session?.refresh_token,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
 
       throw signInError;
@@ -212,6 +240,7 @@ serve(async (req: Request) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
+    console.error("[parent-auth] Erreur non capturée :", err);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -1,3 +1,4 @@
+// src/lib/outstandingReportGenerator.js
 import { supabase } from './supabase';
 import { sortClasses } from '../lib/classOrder';
 
@@ -5,9 +6,15 @@ function fmt(n) {
   return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export async function generateOutstandingReport(minPercent = 0) {
+/**
+ * Génère un rapport des soldes impayés pour une année académique donnée.
+ * @param {number} minPercent - Seuil minimal de pourcentage restant (0 = tout solde > 0)
+ * @param {string} academicYear - Année académique (ex: '2025/2026')
+ */
+export async function generateOutstandingReport(minPercent = 0, academicYear = '2025/2026') {
   const { data, error } = await supabase.rpc('get_outstanding_balances', {
     p_min_percent: minPercent,
+    p_academic_year: academicYear,  // Nouveau paramètre
   });
 
   if (error || !data?.length) {
@@ -18,7 +25,6 @@ export async function generateOutstandingReport(minPercent = 0) {
   // Regrouper par terme puis par classe
   const grouped = {};
   data.forEach(row => {
-    // Sécurité : ignorer les soldes nuls (normalement déjà filtrés par la RPC)
     if (parseFloat(row.outstanding) === 0) return;
     if (!grouped[row.term]) grouped[row.term] = {};
     if (!grouped[row.term][row.class_name]) grouped[row.term][row.class_name] = [];
@@ -39,7 +45,7 @@ export async function generateOutstandingReport(minPercent = 0) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Outstanding Balances – 2025/2026</title>
+<title>Outstanding Balances – ${academicYear}</title>
 <style>
   body { font-family: 'Segoe UI', Arial, sans-serif; margin: 1.5cm; color: #1e293b; }
   h1 { border-bottom: 2px solid #2563eb; padding-bottom: 6px; }
@@ -57,12 +63,12 @@ export async function generateOutstandingReport(minPercent = 0) {
 </style>
 </head>
 <body>
-<h1>Outstanding Balances – Academic Year 2025/2026${percentLabel}</h1>
+<h1>Outstanding Balances – Academic Year ${academicYear}${percentLabel}</h1>
 <p>Only students with a strictly positive balance matching the selected threshold are listed.</p>
 `;
 
   const termsOrder = ['Term 1', 'Term 2', 'Term 3'];
-  const termSummaries = []; // stocke les totaux pour le tableau récapitulatif
+  const termSummaries = [];
 
   let grandTotalExpected = 0;
   let grandTotalPaid = 0;
@@ -127,19 +133,13 @@ export async function generateOutstandingReport(minPercent = 0) {
       </tr>
     </table>`;
 
-    termSummaries.push({
-      term,
-      expected: termTotalExpected,
-      paid: termTotalPaid,
-      outstanding: termTotalOutstanding,
-    });
+    termSummaries.push({ term, expected: termTotalExpected, paid: termTotalPaid, outstanding: termTotalOutstanding });
 
     grandTotalExpected += termTotalExpected;
     grandTotalPaid += termTotalPaid;
     grandTotalOutstanding += termTotalOutstanding;
   });
 
-  // Récapitulatif général avec rappel des termes
   if (termSummaries.length > 0) {
     html += `<h2>Grand Total – All Terms</h2>
     <table>
