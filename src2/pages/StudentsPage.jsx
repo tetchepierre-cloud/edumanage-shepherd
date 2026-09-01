@@ -65,19 +65,42 @@ export default function StudentsPage() {
     setLoading(false);
   }
 
+  // ─── FONCTION loadDiscounts CORRIGÉE : année lue depuis app_settings ───
   const loadDiscounts = async (student) => {
     setLoadingDiscounts(true);
     if (!student.classes?.name) { setDiscounts([]); setLoadingDiscounts(false); return; }
-    const className = student.classes.name.trim()
-    const levelName = className.replace(/\s+[A-Za-z]$/, '').trim()
-    const { data: level } = await supabase.from('levels').select('id').ilike('name', levelName).maybeSingle();
+
+    // Lecture de l'année académique depuis app_settings
+    const { data: settings } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'academic_year')
+      .maybeSingle();
+    const academicYear = settings?.value || '2026/2027'; // fallback
+
+    const className = student.classes.name.trim();
+    const levelName = className.replace(/\s+[A-Za-z]$/, '').trim();
+    const { data: level } = await supabase
+      .from('levels')
+      .select('id')
+      .ilike('name', levelName)
+      .maybeSingle();
     if (!level) { setDiscounts([]); setLoadingDiscounts(false); return; }
-    const academicYear = '2025/2026';
-    const { data: fees } = await supabase.from('fee_structure')
+
+    const { data: fees } = await supabase
+      .from('fee_structure')
       .select('id, fee_name, fee_type, amount, term')
-      .eq('level_id', level.id).eq('academic_year', academicYear).eq('is_active', true)
-      .order('term').order('fee_name');
-    const { data: existingDiscounts } = await supabase.from('student_fee_discounts').select('*').eq('student_id', student.id);
+      .eq('level_id', level.id)
+      .eq('academic_year', academicYear)
+      .eq('is_active', true)
+      .order('term')
+      .order('fee_name');
+
+    const { data: existingDiscounts } = await supabase
+      .from('student_fee_discounts')
+      .select('*')
+      .eq('student_id', student.id);
+
     const discountMap = {};
     (existingDiscounts || []).forEach(d => { discountMap[d.fee_structure_id] = d; });
 
@@ -96,7 +119,7 @@ export default function StudentsPage() {
       annual_amount: parseFloat(fee.amount),
       discount_type: discountMap[fee.id]?.discount_type || 'percentage',
       discount_value: discountMap[fee.id]?.discount_value || 0,
-      override_amount: overrideMap[fee.id] !== undefined ? overrideMap[fee.id] : null,   // null = pas d'override
+      override_amount: overrideMap[fee.id] !== undefined ? overrideMap[fee.id] : null,
     }));
     setDiscounts(list);
     setLoadingDiscounts(false);
@@ -164,7 +187,6 @@ export default function StudentsPage() {
     const year = parseInt(match[3], 10);
     // Vérification basique de validité (mois, jour)
     if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-    // On pourrait vérifier le nombre de jours du mois, mais le champ date gère déjà l'essentiel
     return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   };
 
@@ -174,7 +196,7 @@ export default function StudentsPage() {
       first_name:    student.first_name    || '',
       last_name:     student.last_name     || '',
       class_id:      student.class_id      || '',
-      date_of_birth: student.date_of_birth || '', // conversion DD/MM/YYYY
+      date_of_birth: student.date_of_birth || '',
       gender:        student.gender        || '',
       parent_name:   student.parent_name   || '',
       parent_phone:  student.parent_phone  || '',
@@ -215,7 +237,7 @@ export default function StudentsPage() {
       first_name:    form.first_name.trim(),
       last_name:     form.last_name.trim(),
       class_id:      form.class_id      || null,
-      date_of_birth: isoDate,  // date ISO
+      date_of_birth: isoDate,
       gender:        form.gender        || null,
       parent_name:   form.parent_name.trim()  || null,
       parent_phone:  form.parent_phone.trim() || null,

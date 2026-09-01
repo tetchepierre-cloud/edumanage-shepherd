@@ -1,5 +1,5 @@
 // src/lib/statementGenerator.js
-// Relevé de Compte Élève — avec support du Terme
+// Relevé de Compte Élève — avec support du Terme et Frais Optionnels
 
 import { jsPDF } from 'jspdf'
 import { supabase } from './supabase'
@@ -30,48 +30,45 @@ function resolvePeriod(academicYear, period) {
   return map[period] || map.full
 }
 
+// ─── FONCTION CORRIGÉE : utilise level_id et inclut les frais optionnels même si term est null ───
 async function getExpectedTotalForStudent(student, academicYear, dateTo, term) {
-  const className = (student.classes?.name || '').trim()
-  if (!className) return { total: 0, hasSchedule: false }
+  let total = 0
+  let hasSchedule = false
 
-  const levelName = className.replace(/\s*[A-Za-z]$/, '').trim()
+  if (!student?.id) return { total, hasSchedule }
 
-  const { data: level } = await supabase
-    .from('levels')
-    .select('id')
-    .ilike('name', levelName)
-    .maybeSingle()
-  if (!level) return { total: 0, hasSchedule: false }
+  // 1. Récupérer le level_id via la classe de l'élève
+  const { data: studentData, error: studentErr } = await supabase
+    .from('students')
+    .select('class_id, classes(level_id)')
+    .eq('id', student.id)
+    .single()
 
+  if (studentErr || !studentData?.classes?.level_id) {
+    return { total, hasSchedule }
+  }
+
+  const levelId = studentData.classes.level_id
+
+  // 2. Récupérer les frais obligatoires pour ce niveau
   let feeQuery = supabase
     .from('fee_structure')
-    .select('id')
-    .eq('level_id', level.id)
+    .select('id, amount')
+    .eq('level_id', levelId)
     .eq('academic_year', academicYear)
     .eq('is_active', true)
 
   if (term) feeQuery = feeQuery.eq('term', term)
 
   const { data: fees } = await feeQuery
-  if (!fees?.length) return { total: 0, hasSchedule: false }
-
-  const { data: discounts } = await supabase
-    .from('student_fee_discounts')
-    .select('fee_structure_id, discount_type, discount_value')
-    .eq('student_id', student.id)
-  const discountMap = {}
-  ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
-
-  // Récupérer les overrides pour cet élève
-  const { data: overrides } = await supabase
-    .from('student_fee_overrides')
-    .select('fee_structure_id, override_amount')
-    .eq('student_id', student.id)
-  const overrideMap = {}
-  ;(overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount })
+  if (!fees?.length) {
+    // S'il n'y a pas de frais obligatoires, on vérifie quand même les frais optionnels
+    return await getOptionalOnly(student, academicYear, term)
+  }
 
   const feeIds = fees.map(f => f.id)
 
+  // 3. Échéanciers
   const { data: schedules } = await supabase
     .from('fee_schedules')
     .select('amount, fee_structure_id')
@@ -82,23 +79,86 @@ async function getExpectedTotalForStudent(student, academicYear, dateTo, term) {
   ;(schedules || []).forEach(s => {
     totalByFee[s.fee_structure_id] = (totalByFee[s.fee_structure_id] || 0) + parseFloat(s.amount || 0)
   })
+  hasSchedule = schedules && schedules.length > 0
 
-  let total = 0
+  // 4. Remises
+  const { data: discounts } = await supabase
+    .from('student_fee_discounts')
+    .select('fee_structure_id, discount_type, discount_value')
+    .eq('student_id', student.id)
+  const discountMap = {}
+  ;(discounts || []).forEach(d => {
+    discountMap[d.fee_structure_id] = d
+  })
+
+  // 5. Overrides
+  const { data: overrides } = await supabase
+    .from('student_fee_overrides')
+    .select('fee_structure_id, override_amount')
+    .eq('student_id', student.id)
+  const overrideMap = {}
+  ;(overrides || []).forEach(o => {
+    overrideMap[o.fee_structure_id] = o.override_amount
+  })
+
+  // 6. Calcul des frais obligatoires
+  let mandatoryTotal = 0
   fees.forEach(f => {
     let feeTotal = totalByFee[f.id] || 0
-    // Appliquer l'override si présent
     if (overrideMap[f.id] !== undefined) {
       feeTotal = parseFloat(overrideMap[f.id])
     }
     const disc = discountMap[f.id]
     if (disc) {
-      if (disc.discount_type === 'fixed') feeTotal = Math.max(0, feeTotal - parseFloat(disc.discount_value))
-      else feeTotal *= (1 - parseFloat(disc.discount_value) / 100)
+      if (disc.discount_type === 'fixed') {
+        feeTotal = Math.max(0, feeTotal - parseFloat(disc.discount_value))
+      } else {
+        feeTotal *= (1 - parseFloat(disc.discount_value) / 100)
+      }
     }
-    total += feeTotal
+    mandatoryTotal += feeTotal
   })
 
-  return { total: parseFloat(total.toFixed(2)), hasSchedule: schedules && schedules.length > 0 }
+  // 7. Ajout des frais optionnels (sans filtre term si term est null)
+  let optionalQuery = supabase
+    .from('student_optional_fees')
+    .select('amount')
+    .eq('student_id', student.id)
+    .eq('academic_year', academicYear)
+    .eq('is_active', true)
+
+  if (term) {
+    optionalQuery = optionalQuery.eq('term', term)
+  }
+
+  const { data: optionalFees } = await optionalQuery
+
+  const optionalTotal = (optionalFees || []).reduce((sum, o) => sum + parseFloat(o.amount || 0), 0)
+
+  total = mandatoryTotal + optionalTotal
+
+  return { total: parseFloat(total.toFixed(2)), hasSchedule }
+}
+
+// Fonction utilitaire pour récupérer uniquement les frais optionnels si aucun frais obligatoire
+async function getOptionalOnly(student, academicYear, term) {
+  let optionalQuery = supabase
+    .from('student_optional_fees')
+    .select('amount')
+    .eq('student_id', student.id)
+    .eq('academic_year', academicYear)
+    .eq('is_active', true)
+
+  if (term) {
+    optionalQuery = optionalQuery.eq('term', term)
+  }
+
+  const { data: optionalFees } = await optionalQuery
+  const optionalTotal = (optionalFees || []).reduce((sum, o) => sum + parseFloat(o.amount || 0), 0)
+  return {
+    total: parseFloat(optionalTotal.toFixed(2)),
+    hasSchedule: optionalFees && optionalFees.length > 0
+  }
 }
 
 export async function generateStudentStatement({
@@ -132,6 +192,7 @@ export async function generateStudentStatement({
   }
   const studentName = `${student.first_name || ''} ${student.last_name || ''}`.trim()
 
+  // Utilisation de la fonction corrigée
   const { total: expected, hasSchedule } = await getExpectedTotalForStudent(student, academicYear, dateTo, term)
 
   let paymentQuery = supabase

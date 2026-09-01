@@ -6,32 +6,185 @@ function fmt(n) {
   return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/**
- * Génère un rapport des soldes impayés pour une année académique donnée.
- * @param {number} minPercent - Seuil minimal de pourcentage restant (0 = tout solde > 0)
- * @param {string} academicYear - Année académique (ex: '2025/2026')
- */
 export async function generateOutstandingReport(minPercent = 0, academicYear = '2025/2026') {
-  const { data, error } = await supabase.rpc('get_outstanding_balances', {
-    p_min_percent: minPercent,
-    p_academic_year: academicYear,  // Nouveau paramètre
-  });
+  console.log('🟢 Chargement des données...');
 
-  if (error || !data?.length) {
-    alert('No data found for the selected filter.');
+  // 1. Récupérer tous les élèves avec leur classe et level_id
+  const { data: students, error: studentsError } = await supabase
+    .from('students')
+    .select('id, first_name, last_name, class_id, classes(name, level_id)')
+    .eq('active', true);
+
+  if (studentsError || !students?.length) {
+    alert('No students found.');
     return;
   }
 
-  // Regrouper par terme puis par classe
+  const studentIds = students.map(s => s.id);
+  const levelIds = [...new Set(students.map(s => s.classes?.level_id).filter(Boolean))];
+
+  if (!levelIds.length) {
+    alert('No level IDs found.');
+    return;
+  }
+
+  const allTerms = ['Term 1', 'Term 2', 'Term 3'];
+
+  // 2. Charger tous les frais obligatoires pour ces niveaux
+  const { data: allFees } = await supabase
+    .from('fee_structure')
+    .select('id, amount, level_id, term')
+    .in('level_id', levelIds)
+    .eq('academic_year', academicYear)
+    .eq('is_active', true);
+
+  // 3. Charger tous les échéanciers pour ces frais
+  const feeIds = (allFees || []).map(f => f.id);
+  const { data: allSchedules } = await supabase
+    .from('fee_schedules')
+    .select('amount, fee_structure_id, due_date')
+    .in('fee_structure_id', feeIds);
+
+  // 4. Charger toutes les remises pour ces élèves
+  const { data: allDiscounts } = await supabase
+    .from('student_fee_discounts')
+    .select('student_id, fee_structure_id, discount_type, discount_value')
+    .in('student_id', studentIds);
+
+  // 5. Charger tous les overrides pour ces élèves
+  const { data: allOverrides } = await supabase
+    .from('student_fee_overrides')
+    .select('student_id, fee_structure_id, override_amount')
+    .in('student_id', studentIds);
+
+  // 6. Charger tous les frais optionnels pour ces élèves
+  const { data: allOptional } = await supabase
+    .from('student_optional_fees')
+    .select('student_id, amount, term')
+    .in('student_id', studentIds)
+    .eq('academic_year', academicYear)
+    .eq('is_active', true);
+
+  // 7. Charger tous les paiements pour ces élèves
+  const { data: allPayments } = await supabase
+    .from('fee_payments')
+    .select('student_id, amount, term')
+    .in('student_id', studentIds)
+    .eq('academic_year', academicYear)
+    .in('status', ['paid', 'partial']);
+
+  console.log('✅ Données chargées, calcul en cours...');
+
+  // ---- Indexation en mémoire ----
+  const feesByLevelTerm = {};
+  (allFees || []).forEach(f => {
+    const key = `${f.level_id}|${f.term}`;
+    if (!feesByLevelTerm[key]) feesByLevelTerm[key] = [];
+    feesByLevelTerm[key].push(f);
+  });
+
+  const schedulesByFee = {};
+  (allSchedules || []).forEach(s => {
+    if (!schedulesByFee[s.fee_structure_id]) schedulesByFee[s.fee_structure_id] = [];
+    schedulesByFee[s.fee_structure_id].push(s);
+  });
+
+  const discountsByStudentFee = {};
+  (allDiscounts || []).forEach(d => {
+    const key = `${d.student_id}|${d.fee_structure_id}`;
+    discountsByStudentFee[key] = d;
+  });
+
+  const overridesByStudentFee = {};
+  (allOverrides || []).forEach(o => {
+    const key = `${o.student_id}|${o.fee_structure_id}`;
+    overridesByStudentFee[key] = o.override_amount;
+  });
+
+  const optionalByStudentTerm = {};
+  (allOptional || []).forEach(o => {
+    const key = `${o.student_id}|${o.term}`;
+    optionalByStudentTerm[key] = (optionalByStudentTerm[key] || 0) + parseFloat(o.amount || 0);
+  });
+
+  const paymentsByStudentTerm = {};
+  (allPayments || []).forEach(p => {
+    const key = `${p.student_id}|${p.term}`;
+    paymentsByStudentTerm[key] = (paymentsByStudentTerm[key] || 0) + parseFloat(p.amount || 0);
+  });
+
+  // ---- Calcul des soldes ----
+  const results = [];
+
+  for (const student of students) {
+    const levelId = student.classes?.level_id;
+    if (!levelId) continue;
+
+    for (const term of allTerms) {
+      const fees = feesByLevelTerm[`${levelId}|${term}`] || [];
+      if (!fees.length) continue;
+
+      let mandatoryExpected = 0;
+      fees.forEach(f => {
+        const schedules = schedulesByFee[f.id] || [];
+        // On prend la somme des échéanciers jusqu'à la fin du terme (approximatif)
+        // Pour simplifier, on prend tout l'échéancier (le rapport Outstanding est pour toute l'année)
+        let amount = schedules.reduce((sum, s) => sum + parseFloat(s.amount || 0), 0);
+        if (amount === 0) amount = parseFloat(f.amount); // fallback
+
+        const overrideKey = `${student.id}|${f.id}`;
+        if (overridesByStudentFee[overrideKey] !== undefined) {
+          amount = parseFloat(overridesByStudentFee[overrideKey]);
+        }
+
+        const discountKey = `${student.id}|${f.id}`;
+        const disc = discountsByStudentFee[discountKey];
+        if (disc) {
+          if (disc.discount_type === 'fixed') amount = Math.max(0, amount - parseFloat(disc.discount_value));
+          else amount *= (1 - parseFloat(disc.discount_value) / 100);
+        }
+        mandatoryExpected += amount;
+      });
+
+      const optionalKey = `${student.id}|${term}`;
+      const optionalTotal = optionalByStudentTerm[optionalKey] || 0;
+      const expected = mandatoryExpected + optionalTotal;
+
+      if (expected === 0) continue;
+
+      const paymentKey = `${student.id}|${term}`;
+      const totalPaid = paymentsByStudentTerm[paymentKey] || 0;
+      const outstanding = Math.max(0, expected - totalPaid);
+
+      if (outstanding === 0) continue;
+      const outstandingPercent = (outstanding / expected) * 100;
+      if (outstandingPercent < minPercent) continue;
+
+      results.push({
+        student_name: `${student.first_name} ${student.last_name}`,
+        class_name: student.classes?.name || 'N/A',
+        term: term,
+        expected: expected,
+        paid: totalPaid,
+        outstanding: outstanding,
+      });
+    }
+  }
+
+  if (!results.length) {
+    alert('No outstanding balances found for the selected filter.');
+    return;
+  }
+
+  // ---- Regrouper et générer le HTML ----
   const grouped = {};
-  data.forEach(row => {
-    if (parseFloat(row.outstanding) === 0) return;
+  results.forEach(row => {
     if (!grouped[row.term]) grouped[row.term] = {};
     if (!grouped[row.term][row.class_name]) grouped[row.term][row.class_name] = [];
     grouped[row.term][row.class_name].push(row);
   });
 
-  // Titre adapté
+  // (suite HTML identique à la version précédente)
   let percentLabel;
   if (minPercent === 0) {
     percentLabel = ' (Any balance > 0)';
@@ -166,6 +319,10 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
   html += `</body></html>`;
 
   const w = window.open('', '_blank');
-  w.document.write(html);
-  w.document.close();
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+  } else {
+    alert('Please allow pop-ups for this site to view the report.');
+  }
 }

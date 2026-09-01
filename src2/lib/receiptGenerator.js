@@ -5,8 +5,8 @@ import { supabase } from './supabase'
 // Dimensions A5 Paysage (Landscape) en mm
 const A5_W = 210
 const A5_H = 148
-const M    = 12 // Marges optimales
-const CW   = A5_W - (M * 2) // Largeur de contenu utile (186mm)
+const M    = 12
+const CW   = A5_W - (M * 2)
 
 // Palette de couleurs professionnelle (RGB)
 const BLUE   = [30, 77, 145]
@@ -182,7 +182,7 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   text(doc, 'Amount Due (GHS)', A5_W - M - 42, tableY + 4.8, { size: 8.5, style: 'bold', color: WHITE, align: 'right' })
   text(doc, 'Amount Paid (GHS)', A5_W - M - 3, tableY + 4.8, { size: 8.5, style: 'bold', color: WHITE, align: 'right' })
 
-  // --- RÉCUPÉRATION DYNAMIQUE DU VRAI SOLDE VIA SUPABASE (déplacée avant le tableau) ---
+  // --- RÉCUPÉRATION DYNAMIQUE DU VRAI SOLDE VIA SUPABASE (CORRIGÉE) ---
   const year = payment.academic_year || '2025/2026';
   const term = payment.term || 'Term 2';
   const amountPaidToday = parseFloat(payment.amount || payment.total_paid || 0);
@@ -190,15 +190,25 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
   let termExpected = 0;
   let termPaidBefore = 0;
 
-  if (classNameVal && classNameVal !== 'N/A') {
-    // ⚠️ regex corrigée (espace obligatoire avant le suffixe)
-    const levelName = classNameVal.trim().replace(/\s+[A-Za-z]$/, '').trim();
-    const { data: level } = await supabase.from('levels').select('id').ilike('name', levelName).maybeSingle();
-    
-    if (level) {
-      const { data: fees } = await supabase.from('fee_structure')
-        .select('id, amount').eq('level_id', level.id).eq('academic_year', year)
-        .eq('term', term).eq('is_active', true);
+  if (payment.student_id) {
+    // 1. Récupérer le level_id via la classe de l'élève
+    const { data: studentData, error: studentErr } = await supabase
+      .from('students')
+      .select('class_id, classes(level_id)')
+      .eq('id', payment.student_id)
+      .single();
+
+    if (!studentErr && studentData?.classes?.level_id) {
+      const levelId = studentData.classes.level_id;
+
+      // 2. Récupérer les frais obligatoires pour ce niveau
+      const { data: fees } = await supabase
+        .from('fee_structure')
+        .select('id, amount')
+        .eq('level_id', levelId)
+        .eq('academic_year', year)
+        .eq('term', term)
+        .eq('is_active', true);
 
       // Récupération des réductions de l'élève
       const { data: discounts } = await supabase
@@ -211,7 +221,7 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
         discountMap[d.fee_structure_id] = d;
       });
 
-      // ✅ Récupération des overrides de frais pour l'élève
+      // Récupération des overrides de frais pour l'élève
       const { data: overrides } = await supabase
         .from('student_fee_overrides')
         .select('fee_structure_id, override_amount')
@@ -219,8 +229,9 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
       const overrideMap = {};
       (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
 
-      // Calcul du montant attendu avec overrides et réductions
-      termExpected = (fees || []).reduce((s, f) => {
+      // 3. Calcul du montant attendu obligatoire avec overrides et réductions
+      let mandatoryExpected = 0;
+      (fees || []).forEach(f => {
         let amount = overrideMap[f.id] !== undefined
           ? parseFloat(overrideMap[f.id])
           : parseFloat(f.amount || 0);
@@ -232,13 +243,32 @@ export async function printReceipt(payment, schoolConfig = {}, student = {}, cur
             amount = amount * (1 - parseFloat(disc.discount_value) / 100);
           }
         }
-        return s + amount;
-      }, 0);
+        mandatoryExpected += amount;
+      });
 
+      // 4. Récupération des frais optionnels
+      const { data: optionalFees } = await supabase
+        .from('student_optional_fees')
+        .select('amount')
+        .eq('student_id', payment.student_id)
+        .eq('academic_year', year)
+        .eq('term', term)
+        .eq('is_active', true);
+      
+      const totalOptional = (optionalFees || []).reduce((sum, o) => sum + parseFloat(o.amount || 0), 0);
+
+      // 5. Montant attendu total
+      termExpected = mandatoryExpected + totalOptional;
+
+      // 6. Paiements antérieurs (excluant le paiement en cours)
       const { data: previousPayments } = await supabase
-        .from('fee_payments').select('amount').eq('student_id', payment.student_id)
-        .eq('academic_year', year).eq('term', term)
-        .in('status', ['paid', 'partial']).neq('id', payment.id);
+        .from('fee_payments')
+        .select('amount')
+        .eq('student_id', payment.student_id)
+        .eq('academic_year', year)
+        .eq('term', term)
+        .in('status', ['paid', 'partial'])
+        .neq('id', payment.id);
         
       termPaidBefore = (previousPayments || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0);
     }

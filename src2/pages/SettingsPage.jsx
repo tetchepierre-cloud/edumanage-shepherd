@@ -242,6 +242,13 @@ export default function SettingsPage() {
             📅 Fee Schedules
           </button>
         </CanSee>
+        <CanSee module="settings" section="tabs" element="Optional Fees tab">
+          <button onClick={() => setActiveTab('optionalfees')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
+              ${activeTab === 'optionalfees' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            💰 Optional Fees
+          </button>
+        </CanSee>
         <CanSee module="settings" section="tabs" element="Academic tab">
           <button onClick={() => setActiveTab('academic')}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
@@ -256,14 +263,14 @@ export default function SettingsPage() {
             🔐 Permissions
           </button>
         </CanSee>
-      </div>
-      <CanSee module="settings" section="tabs" element="Teacher Access tab">
+        <CanSee module="settings" section="tabs" element="Teacher Access tab">
           <button onClick={() => setActiveTab('assignments')}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors
               ${activeTab === 'assignments' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
             🔑 Teacher Access
           </button>
         </CanSee>
+      </div>
 
       {/* ── Tab: School ── */}
       {activeTab === 'school' && (
@@ -480,9 +487,11 @@ export default function SettingsPage() {
       {/* ── Tab: Fee Schedules ── */}
       {activeTab === 'schedules' && <FeeSchedulesTab />}
 
+      {/* ── Tab: Optional Fees ── */}
+      {activeTab === 'optionalfees' && <OptionalFeesTab />}
+
       {activeTab === 'academic' && <AcademicSettingsTab />}
       {activeTab === 'permissions' && <PermissionsTab />}
-
       {activeTab === 'assignments' && <TeacherAssignmentsTab />}
 
     </div>
@@ -490,7 +499,7 @@ export default function SettingsPage() {
 }
 
 // ══════════════════════════════════════════════════════════
-// FEE SCHEDULES TAB (complet, inchangé sauf qu'on n'ajoute pas de permissions ici)
+// FEE SCHEDULES TAB (complet, inchangé)
 // ══════════════════════════════════════════════════════════
 function FeeSchedulesTab() {
   const [levels, setLevels]           = useState([])
@@ -746,6 +755,261 @@ function FeeSchedulesTab() {
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// OPTIONAL FEES TAB (avec recherche d'élève)
+// ══════════════════════════════════════════════════════════
+function OptionalFeesTab() {
+  const [students, setStudents] = useState([])
+  const [selectedStudent, setSelectedStudent] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
+  const [showDropdown, setShowDropdown] = useState(false)
+  const [feeName, setFeeName] = useState('')
+  const [amount, setAmount] = useState('')
+  const [term, setTerm] = useState('Term 1')
+  const [academicYear, setAcademicYear] = useState('2025/2026')
+  const [optionalFees, setOptionalFees] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const ACADEMIC_YEARS = ['2024/2025', '2025/2026', '2026/2027']
+  const TERMS = ['Term 1', 'Term 2', 'Term 3']
+
+  useEffect(() => {
+    loadStudents()
+    loadOptionalFees()
+  }, [])
+
+  const loadStudents = async () => {
+    const { data } = await supabase
+      .from('students')
+      .select('id, first_name, last_name, classes(name)')
+      .order('first_name')
+    setStudents(data || [])
+  }
+
+  const loadOptionalFees = async () => {
+    setLoading(true)
+    const { data } = await supabase
+      .from('student_optional_fees')
+      .select('*, students(first_name, last_name)')
+      .order('created_at', { ascending: false })
+    setOptionalFees(data || [])
+    setLoading(false)
+  }
+
+  // Filtrer les étudiants selon la recherche
+  const filteredStudents = students.filter(s => {
+    const fullName = `${s.first_name} ${s.last_name}`.toLowerCase()
+    const className = (s.classes?.name || '').toLowerCase()
+    const query = searchTerm.toLowerCase()
+    return fullName.includes(query) || className.includes(query)
+  })
+
+  // Sélectionner un étudiant
+  const handleSelectStudent = (student) => {
+    setSelectedStudent(student.id)
+    setSearchTerm(`${student.first_name} ${student.last_name} ${student.classes?.name ? `(${student.classes.name})` : ''}`)
+    setShowDropdown(false)
+  }
+
+  const handleAdd = async () => {
+    if (!selectedStudent || !feeName || !amount) {
+      toast.error('Please fill all fields (Student, Fee Name, Amount)')
+      return
+    }
+    setSaving(true)
+    const { error } = await supabase.from('student_optional_fees').insert({
+      student_id: selectedStudent,
+      fee_name: feeName,
+      amount: parseFloat(amount),
+      academic_year: academicYear,
+      term: term,
+      is_active: true,
+    })
+    if (error) {
+      toast.error('Error: ' + error.message)
+      setSaving(false)
+      return
+    }
+    toast.success('Optional fee added successfully!')
+    setFeeName('')
+    setAmount('')
+    setSearchTerm('')
+    setSelectedStudent('')
+    loadOptionalFees()
+    setSaving(false)
+  }
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this optional fee?')) return
+    const { error } = await supabase.from('student_optional_fees').delete().eq('id', id)
+    if (error) {
+      toast.error('Error: ' + error.message)
+      return
+    }
+    toast.success('Deleted')
+    loadOptionalFees()
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-700">
+        <p className="font-semibold mb-1">💰 Optional Fees (per Student)</p>
+        <p>Assign individual fees (e.g., Bus, Canteen, Sports) to specific students. These fees are added to the student's total fees for the selected term and academic year.</p>
+      </div>
+
+      {/* Formulaire d'ajout */}
+      <div className="bg-white rounded-xl shadow p-6">
+        <h3 className="text-md font-semibold mb-4">Add Optional Fee</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Champ de recherche avec dropdown */}
+          <div className="relative">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Student *</label>
+            <input
+              type="text"
+              placeholder="Type student name..."
+              value={searchTerm}
+              onChange={e => {
+                setSearchTerm(e.target.value)
+                setShowDropdown(true)
+                if (e.target.value === '') setSelectedStudent('')
+              }}
+              onFocus={() => setShowDropdown(true)}
+              onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+              autoComplete="off"
+            />
+            {showDropdown && (
+              <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                {filteredStudents.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-gray-400">No student found</div>
+                ) : (
+                  filteredStudents.slice(0, 20).map(s => (
+                    <div
+                      key={s.id}
+                      onClick={() => handleSelectStudent(s)}
+                      className="px-3 py-2 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-0"
+                    >
+                      <span className="font-medium">{s.first_name} {s.last_name}</span>
+                      <span className="text-gray-400 ml-2 text-xs">{s.classes?.name || 'No class'}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+            {selectedStudent && searchTerm && (
+              <div className="mt-1 text-xs text-green-600 font-medium">✓ Student selected</div>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fee Name *</label>
+            <input
+              type="text"
+              placeholder="e.g. Bus, Canteen"
+              value={feeName}
+              onChange={e => setFeeName(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Amount (GHS) *</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+            <select
+              value={academicYear}
+              onChange={e => setAcademicYear(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+            >
+              {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Term</label>
+            <select
+              value={term}
+              onChange={e => setTerm(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+            >
+              {TERMS.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              onClick={handleAdd}
+              disabled={saving}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              <Plus size={16} /> {saving ? 'Adding...' : 'Add Fee'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Liste des frais optionnels existants */}
+      <div className="bg-white rounded-xl shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-md font-semibold">Existing Optional Fees</h3>
+          <span className="text-sm text-gray-500">{optionalFees.length} entries</span>
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center py-8"><Loader2 className="animate-spin text-blue-600" size={24} /></div>
+        ) : optionalFees.length === 0 ? (
+          <p className="text-gray-400 text-center py-8">No optional fees assigned yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b">
+                <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="px-4 py-2">Student</th>
+                  <th className="px-4 py-2">Fee Name</th>
+                  <th className="px-4 py-2 text-right">Amount</th>
+                  <th className="px-4 py-2">Term</th>
+                  <th className="px-4 py-2">Academic Year</th>
+                  <th className="px-4 py-2 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {optionalFees.map(f => (
+                  <tr key={f.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-2 font-medium">
+                      {f.students?.first_name} {f.students?.last_name}
+                    </td>
+                    <td className="px-4 py-2">{f.fee_name}</td>
+                    <td className="px-4 py-2 text-right font-semibold text-blue-700">
+                      GHS {parseFloat(f.amount).toFixed(2)}
+                    </td>
+                    <td className="px-4 py-2">{f.term}</td>
+                    <td className="px-4 py-2">{f.academic_year}</td>
+                    <td className="px-4 py-2 text-center">
+                      <button
+                        onClick={() => handleDelete(f.id)}
+                        className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

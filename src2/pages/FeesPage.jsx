@@ -225,24 +225,71 @@ export default function FeesPage() {
     const overrideMap = {}
     ;(overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount })
 
-    return fees.map(f => {
-      let originalAmount = overrideMap[f.id] !== undefined
-        ? parseFloat(overrideMap[f.id])
-        : parseFloat(f.amount)
-      let finalAmount = originalAmount
-      const discount = discountMap[f.id]
-      if (discount) {
-        if (discount.discount_type === 'fixed') finalAmount = Math.max(0, originalAmount - parseFloat(discount.discount_value))
-        else finalAmount = originalAmount * (1 - parseFloat(discount.discount_value) / 100)
+    // --- AJOUT FRAIS OPTIONNELS ---
+    const { data: optionalFees, error: optErr } = await supabase
+      .from('student_optional_fees')
+      .select('id, fee_name, amount')
+      .eq('student_id', studentId)
+      .eq('academic_year', academicYear)
+      .eq('term', term)
+      .eq('is_active', true);
+
+    if (optErr) console.warn('Erreur chargement frais optionnels:', optErr);
+
+    // Fusionner les frais obligatoires et optionnels
+    const allFees = fees.map(f => ({ 
+      id: f.id, 
+      fee_name: f.fee_name, 
+      fee_type: f.fee_type, 
+      amount: f.amount, 
+      is_mandatory: f.is_mandatory, 
+      required_for_admission: f.required_for_admission,
+      is_optional: false 
+    }));
+
+    (optionalFees || []).forEach(opt => {
+      allFees.push({
+        id: opt.id,
+        fee_name: opt.fee_name,
+        fee_type: 'Optional',
+        amount: opt.amount,
+        is_mandatory: false,
+        required_for_admission: false,
+        is_optional: true,
+        optional_fee_id: opt.id,
+      });
+    });
+
+    // Appliquer discounts et overrides (uniquement pour les frais obligatoires)
+    const finalItems = allFees.map(f => {
+      let originalAmount = parseFloat(f.amount);
+      let finalAmount = originalAmount;
+      if (!f.is_optional) {
+        const override = overrideMap[f.id];
+        if (override !== undefined) {
+          originalAmount = parseFloat(override);
+          finalAmount = originalAmount;
+        }
+        const discount = discountMap[f.id];
+        if (discount) {
+          if (discount.discount_type === 'fixed') {
+            finalAmount = Math.max(0, originalAmount - parseFloat(discount.discount_value));
+          } else {
+            finalAmount = originalAmount * (1 - parseFloat(discount.discount_value) / 100);
+          }
+        }
       }
       return {
-        description: `${f.fee_name} (${f.fee_type})`,
+        description: `${f.fee_name} (${f.fee_type})${f.is_optional ? ' (Optional)' : ''}`,
         expected: parseFloat(finalAmount.toFixed(2)),
         type: f.fee_name,
-        feeStructureId: f.id,
-        requiredForAdmission: f.required_for_admission,
-      }
-    })
+        feeStructureId: f.is_optional ? f.optional_fee_id : f.id,
+        requiredForAdmission: f.required_for_admission || false,
+        isOptional: f.is_optional || false,
+      };
+    });
+
+    return finalItems;
   }
 
   const getRemainingFeesForStudent = async (studentId, academicYear, term) => {
@@ -278,7 +325,7 @@ export default function FeesPage() {
         alreadyPaid,
         remaining,
         feeStructureId: f.feeStructureId,
-        requiredForAdmission: f.required_for_admission,
+        requiredForAdmission: f.requiredForAdmission,
       }
     })
   }

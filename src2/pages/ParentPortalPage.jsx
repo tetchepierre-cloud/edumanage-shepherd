@@ -238,6 +238,17 @@ export default function ParentPortalPage() {
     total += amount;
   });
 
+  // --- AJOUT FRAIS OPTIONNELS (annuels) ---
+  const { data: optionalFees } = await supabase
+    .from('student_optional_fees')
+    .select('amount')
+    .eq('student_id', id)
+    .eq('academic_year', ACADEMIC_YEAR)
+    .eq('is_active', true);
+
+  const totalOptional = (optionalFees || []).reduce((sum, o) => sum + parseFloat(o.amount), 0);
+  total += totalOptional;
+
   const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).in('status', ['paid','partial']);
   const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
   setBalance({ expected: total, paid, remaining: Math.max(0, total - paid) });
@@ -290,6 +301,18 @@ export default function ParentPortalPage() {
         });
       }
     }
+
+    // --- AJOUT FRAIS OPTIONNELS (par terme) ---
+    const { data: optFees } = await supabase
+      .from('student_optional_fees')
+      .select('amount')
+      .eq('student_id', id)
+      .eq('academic_year', ACADEMIC_YEAR)
+      .eq('term', term)
+      .eq('is_active', true);
+    const totalOptional = (optFees || []).reduce((sum, o) => sum + parseFloat(o.amount), 0);
+    exp += totalOptional;
+
     const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).in('status', ['paid','partial']);
     const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
     res.push({ term, expected: exp, paid, remaining: Math.max(0, exp - paid) });
