@@ -6,6 +6,13 @@ import { CanAct, CanSee } from '../components/PermissionGate'
 
 const FEE_TYPES = ['tuition', 'exam', 'canteen', 'transport', 'uniform', 'other'];
 
+const STUDENT_STATUSES = [
+  { value: 'active',      label: 'Active' },
+  { value: 'transferred', label: 'Transferred to another school' },
+  { value: 'dropped_out', label: 'Dropped out' },
+  { value: 'graduated',   label: 'Graduated / End of cycle' },
+];
+
 export default function StudentsPage() {
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
@@ -17,12 +24,18 @@ export default function StudentsPage() {
   const [form, setForm] = useState({
     first_name: '', last_name: '', class_id: '', date_of_birth: '',
     gender: '', parent_name: '', parent_phone: '',
-    address: '', active: true, min_payment_override: ''
+    address: '', status: 'active', min_payment_override: ''
   })
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
-  const [modalTab, setModalTab] = useState('info') // 'info' | 'discounts'
+  // Confirmation modal when status changes from active to something else
+  const [showConfirmDeparture, setShowConfirmDeparture] = useState(false)
+  const [pendingPayload, setPendingPayload] = useState(null)
+  const [pendingDepartureInfo, setPendingDepartureInfo] = useState({ outstanding: 0, reason: 'transferred' })
+  const [loadingDepartureInfo, setLoadingDepartureInfo] = useState(false)
+
+  const [modalTab, setModalTab] = useState('info')
   const [discounts, setDiscounts] = useState([])
   const [loadingDiscounts, setLoadingDiscounts] = useState(false)
 
@@ -38,45 +51,33 @@ export default function StudentsPage() {
 
   const fetchStudents = async () => {
     setLoading(true);
-    
-    // 1. Récupérer l'utilisateur actuellement connecté
     const { data: { user } } = await supabase.auth.getUser();
-
-    // 2. Récupérer les ID des classes assignées à cet enseignant
     const { data: assignments } = await supabase
       .from('teacher_classes')
       .select('class_id')
       .eq('teacher_id', user.id);
 
-    // 3. Préparer la requête de base
     let query = supabase.from('students').select('*, classes(name)');
-
-    // 4. Si l'enseignant a des classes, filtrer les résultats
     if (assignments && assignments.length > 0) {
       const classIds = assignments.map(a => a.class_id);
       query = query.in('class_id', classIds);
     }
-
-    // 5. Exécuter la requête finale (ajout du tri ici)
     const { data, error } = await query.order('first_name');
-    
     if (error) console.error("Error fetching students:", error);
     setStudents(data || []);
     setLoading(false);
   }
 
-  // ─── FONCTION loadDiscounts CORRIGÉE : année lue depuis app_settings ───
   const loadDiscounts = async (student) => {
     setLoadingDiscounts(true);
     if (!student.classes?.name) { setDiscounts([]); setLoadingDiscounts(false); return; }
 
-    // Lecture de l'année académique depuis app_settings
     const { data: settings } = await supabase
       .from('app_settings')
       .select('value')
       .eq('key', 'academic_year')
       .maybeSingle();
-    const academicYear = settings?.value || '2026/2027'; // fallback
+    const academicYear = settings?.value || '2026/2027';
 
     const className = student.classes.name.trim();
     const levelName = className.replace(/\s+[A-Za-z]$/, '').trim();
@@ -104,7 +105,6 @@ export default function StudentsPage() {
     const discountMap = {};
     (existingDiscounts || []).forEach(d => { discountMap[d.fee_structure_id] = d; });
 
-    // Récupérer les overrides pour cet élève
     const { data: overrides } = await supabase
       .from('student_fee_overrides')
       .select('fee_structure_id, override_amount')
@@ -130,7 +130,6 @@ export default function StudentsPage() {
     const numDiscount = parseFloat(discount_value) || 0;
     if (numDiscount < 0) { setMessage('❌ Discount value cannot be negative.'); return; }
 
-    // Gérer la suppression / upsert de la réduction
     if (numDiscount === 0) {
       await supabase.from('student_fee_discounts').delete()
         .eq('student_id', editStudent.id).eq('fee_structure_id', fee_structure_id);
@@ -143,7 +142,6 @@ export default function StudentsPage() {
       }, { onConflict: 'student_id, fee_structure_id' });
     }
 
-    // Gérer l'override
     if (override_amount !== null && override_amount !== '' && override_amount >= 0) {
       await supabase.from('student_fee_overrides').upsert({
         student_id: editStudent.id,
@@ -151,33 +149,22 @@ export default function StudentsPage() {
         override_amount: parseFloat(override_amount),
       }, { onConflict: 'student_id, fee_structure_id' });
     } else {
-      // Si vide ou null, supprimer l'override
       await supabase.from('student_fee_overrides').delete()
         .eq('student_id', editStudent.id).eq('fee_structure_id', fee_structure_id);
     }
 
     setMessage('✅ Adjustments saved!');
-    // Recharger les discounts pour refléter les changements
     loadDiscounts(editStudent);
   };
 
   const openAddForm = () => {
     setEditStudent(null)
-    setForm({ first_name: '', last_name: '', class_id: '', date_of_birth: '', gender: '', parent_name: '', parent_phone: '', address: '', active: true, min_payment_override: '' })
+    setForm({ first_name: '', last_name: '', class_id: '', date_of_birth: '', gender: '', parent_name: '', parent_phone: '', address: '', status: 'active', min_payment_override: '' })
     setMessage('')
     setModalTab('info')
     setShowForm(true)
   }
 
-  // Convertit une date ISO (YYYY-MM-DD) en format DD/MM/YYYY pour l'affichage
-  const formatDateForInput = (isoDate) => {
-    if (!isoDate) return '';
-    const parts = isoDate.split('-'); // YYYY-MM-DD
-    if (parts.length !== 3) return isoDate;
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
-  };
-
-  // Valide le format DD/MM/YYYY et retourne la date ISO (YYYY-MM-DD) si valide
   const validateAndConvertDate = (input) => {
     const regex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
     const match = input.match(regex);
@@ -185,7 +172,6 @@ export default function StudentsPage() {
     const day = parseInt(match[1], 10);
     const month = parseInt(match[2], 10);
     const year = parseInt(match[3], 10);
-    // Vérification basique de validité (mois, jour)
     if (month < 1 || month > 12 || day < 1 || day > 31) return null;
     return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   };
@@ -201,7 +187,7 @@ export default function StudentsPage() {
       parent_name:   student.parent_name   || '',
       parent_phone:  student.parent_phone  || '',
       address:       student.address       || '',
-      active:        student.active ?? true,
+      status:        student.status || (student.active ? 'active' : 'inactive'),
       min_payment_override: student.min_payment_override || ''
     })
     setMessage('')
@@ -210,19 +196,73 @@ export default function StudentsPage() {
     setShowForm(true)
   }
 
+  // ─── Calcul du solde restant pour un élève (tous les termes) ───
+  const calculateOutstanding = async (student) => {
+    const { data: settings } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'academic_year')
+      .maybeSingle();
+    const academicYear = settings?.value || '2026/2027';
+
+    const { data: studentData } = await supabase
+      .from('students')
+      .select('class_id, classes(level_id)')
+      .eq('id', student.id)
+      .single();
+    const levelId = studentData?.classes?.level_id;
+    if (!levelId) return 0;
+
+    const allTerms = ['Term 1', 'Term 2', 'Term 3'];
+    let totalExpected = 0;
+
+    for (const term of allTerms) {
+      const { data: fees } = await supabase
+        .from('fee_structure')
+        .select('id, amount')
+        .eq('level_id', levelId)
+        .eq('academic_year', academicYear)
+        .eq('term', term)
+        .eq('is_active', true);
+
+      let mandatoryExpected = 0;
+      (fees || []).forEach(f => { mandatoryExpected += parseFloat(f.amount || 0); });
+
+      const { data: optionalFees } = await supabase
+        .from('student_optional_fees')
+        .select('amount')
+        .eq('student_id', student.id)
+        .eq('academic_year', academicYear)
+        .eq('term', term)
+        .eq('is_active', true);
+
+      const optionalTotal = (optionalFees || []).reduce((sum, o) => sum + parseFloat(o.amount || 0), 0);
+      totalExpected += mandatoryExpected + optionalTotal;
+    }
+
+    const { data: payments } = await supabase
+      .from('fee_payments')
+      .select('amount')
+      .eq('student_id', student.id)
+      .eq('academic_year', academicYear)
+      .in('status', ['paid', 'partial']);
+
+    const totalPaid = (payments || []).reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
+    return Math.max(0, totalExpected - totalPaid);
+  }
+
+  // ─── Étape 1 : préparation du save (validation) ───
   const handleSave = async (e) => {
     e.preventDefault()
     setSaving(true)
     setMessage('')
 
-    // Validation téléphone
     if (form.parent_phone.trim() && !/^\d{10}$/.test(form.parent_phone.trim())) {
       setMessage('❌ Phone number must be exactly 10 digits.')
       setSaving(false)
       return
     }
 
-    // Conversion de la date de naissance si fournie
     let isoDate = null;
     if (form.date_of_birth.trim()) {
       isoDate = validateAndConvertDate(form.date_of_birth.trim());
@@ -233,6 +273,11 @@ export default function StudentsPage() {
       }
     }
 
+    const newStatus = form.status || 'active';
+    const wasActive = editStudent?.status === 'active' || (editStudent?.active && !editStudent?.status);
+    const isBecomingInactive = newStatus !== 'active';
+    const statusChanged = editStudent && (editStudent.status !== newStatus);
+
     const payload = {
       first_name:    form.first_name.trim(),
       last_name:     form.last_name.trim(),
@@ -242,16 +287,79 @@ export default function StudentsPage() {
       parent_name:   form.parent_name.trim()  || null,
       parent_phone:  form.parent_phone.trim() || null,
       address:       form.address.trim()      || null,
-      active:        form.active,
+      status:        newStatus,
+      active:        newStatus === 'active',
       min_payment_override: form.min_payment_override ? parseFloat(form.min_payment_override) : null,
     }
+
+    // Si le statut passe de "active" à un statut de départ → demander confirmation
+    if (editStudent && wasActive && isBecomingInactive && statusChanged) {
+      setSaving(false)
+      setPendingPayload(payload)
+      setPendingDepartureInfo({ outstanding: 0, reason: newStatus })
+      setLoadingDepartureInfo(true)
+      setShowConfirmDeparture(true)
+
+      try {
+        const outstanding = await calculateOutstanding(editStudent)
+        setPendingDepartureInfo({ outstanding, reason: newStatus })
+      } catch (err) {
+        console.error('Error calculating outstanding:', err)
+      }
+      setLoadingDepartureInfo(false)
+      return
+    }
+
+    // Sinon, save directement
+    await executeSave(payload, false, 0)
+  }
+
+  // ─── Étape 2 : exécution effective du save ───
+  const executeSave = async (payload, createWriteOff = false, outstanding = 0) => {
+    setSaving(true)
+    setMessage('')
 
     try {
       if (editStudent) {
         const oldStudent = students.find(s => s.id === editStudent.id)
         const { data, error } = await supabase.from('students').update(payload).eq('id', editStudent.id).select().single()
         if (error) throw error
-        await logAction({ action: 'UPDATE', tableName: 'students', recordId: data.id, oldData: oldStudent, newData: data, description: `Updated student ${data.first_name} ${data.last_name}` })
+
+        // Créer une écriture de créance irrécouvrable si nécessaire
+        if (createWriteOff && outstanding > 0) {
+          const { data: settings } = await supabase
+            .from('app_settings')
+            .select('value')
+            .eq('key', 'academic_year')
+            .maybeSingle();
+          const academicYear = settings?.value || '2026/2027';
+          const { data: { user } } = await supabase.auth.getUser();
+
+          await supabase.from('student_write_offs').insert({
+            student_id: data.id,
+            academic_year: academicYear,
+            outstanding_amount: outstanding,
+            reason: payload.status,
+            authorized_by: user?.id,
+          });
+        }
+
+        // Mettre à jour departure_date et outstanding_at_departure si statut ≠ active
+        if (payload.status !== 'active') {
+          await supabase.from('students').update({
+            departure_date: new Date().toISOString().split('T')[0],
+            outstanding_at_departure: outstanding || 0,
+          }).eq('id', data.id);
+        }
+
+        await logAction({ 
+          action: 'UPDATE', 
+          tableName: 'students', 
+          recordId: data.id, 
+          oldData: oldStudent, 
+          newData: data, 
+          description: `Updated student ${data.first_name} ${data.last_name}${createWriteOff ? ` — Departure (${payload.status}) · Balance: GHS ${outstanding.toFixed(2)}` : ''}` 
+        })
         setMessage('✅ Student updated successfully!')
       } else {
         const { data, error } = await supabase.from('students').insert([payload]).select().single()
@@ -266,6 +374,14 @@ export default function StudentsPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  // ─── Confirmation de la déclaration de départ ───
+  const confirmDepartureAndSave = async () => {
+    if (!pendingPayload) return
+    await executeSave(pendingPayload, true, pendingDepartureInfo.outstanding)
+    setShowConfirmDeparture(false)
+    setPendingPayload(null)
   }
 
   const handleDelete = async (id) => {
@@ -339,9 +455,24 @@ export default function StudentsPage() {
                     <td className="px-6 py-4 text-gray-600">{student.gender || '—'}</td>
                     <td className="px-6 py-4 text-gray-600">{student.parent_name || '—'}</td>
                     <td className="px-6 py-4 text-gray-600">{student.parent_phone || '—'}</td>
-                    <td className="px-6 py-4"><span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${student.active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{student.active ? 'Active' : 'Inactive'}</span></td>
                     <td className="px-6 py-4">
-                      <div className="flex gap-2">
+                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                        student.status === 'active' || student.active
+                          ? 'bg-green-100 text-green-700'
+                          : student.status === 'transferred'
+                          ? 'bg-orange-100 text-orange-700'
+                          : student.status === 'graduated'
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {student.status === 'transferred' ? 'Transferred'
+                         : student.status === 'dropped_out' ? 'Dropped Out'
+                         : student.status === 'graduated' ? 'Graduated'
+                         : student.active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex gap-2 flex-wrap">
                         <CanAct module="students" section="table" element="Edit button">
                           <button onClick={() => openEditForm(student)} className="text-blue-600 hover:text-blue-800 text-sm font-medium">✏️ Edit</button>
                         </CanAct>
@@ -358,6 +489,7 @@ export default function StudentsPage() {
         )}
       </div>
 
+      {/* ═══════════ STUDENT FORM MODAL ═══════════ */}
       {showForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -396,27 +528,28 @@ export default function StudentsPage() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
-                    <input
-                      type="date"
-                      value={form.date_of_birth}
-                      onChange={e => setForm({ ...form, date_of_birth: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                    />
+                    <input type="date" value={form.date_of_birth} onChange={e => setForm({ ...form, date_of_birth: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
                     <select value={form.gender} onChange={e => setForm({ ...form, gender: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
                       <option value="">Select gender</option>
                       <option value="Male">Male</option>
-                      <option value="Female">Female</option>                      
+                      <option value="Female">Female</option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                    <select value={form.active} onChange={e => setForm({ ...form, active: e.target.value === 'true' })} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
-                      <option value="true">Active</option>
-                      <option value="false">Inactive</option>
+                    <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                      {STUDENT_STATUSES.map(s => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
                     </select>
+                    {form.status !== 'active' && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        ⚠️ Changing to a non-active status will freeze the outstanding balance as a bad debt.
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Min. Payment Override (GHS)</label>
@@ -455,13 +588,10 @@ export default function StudentsPage() {
                     {discounts.map((discount, idx) => (
                       <div key={idx} className="border rounded-lg p-3 flex items-center gap-3">
                         <div className="flex-1"><p className="text-sm font-medium">{discount.fee_name}</p><p className="text-xs text-gray-500">{discount.term || 'Term ?'} · GHS {discount.annual_amount.toFixed(2)}</p></div>
-                        {/* Nouveau champ : Custom Amount (override) */}
                         <div className="flex items-center gap-1">
                           <span className="text-xs text-gray-500">Custom</span>
                           <input
-                            type="number"
-                            min="0"
-                            step="0.01"
+                            type="number" min="0" step="0.01"
                             value={discount.override_amount !== null ? discount.override_amount : ''}
                             placeholder={discount.annual_amount.toFixed(2)}
                             onChange={e => {
@@ -473,7 +603,6 @@ export default function StudentsPage() {
                             className="w-24 border rounded px-2 py-1 text-sm text-right"
                           />
                         </div>
-                        {/* Contrôles existants de réduction */}
                         <div className="flex items-center gap-2">
                           <select value={discount.discount_type} onChange={e => { const newList = [...discounts]; newList[idx].discount_type = e.target.value; setDiscounts(newList); }} className="border rounded px-2 py-1 text-sm">
                             <option value="percentage">%</option>
@@ -490,6 +619,57 @@ export default function StudentsPage() {
                 <button onClick={() => setShowForm(false)} className="text-sm text-blue-600 hover:underline">Close</button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════ DEPARTURE CONFIRMATION MODAL ═══════════ */}
+      {showConfirmDeparture && editStudent && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6 border-b">
+              <h3 className="text-lg font-bold text-gray-900">⚠️ Confirm Status Change</h3>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-sm font-medium text-gray-900">{editStudent.first_name} {editStudent.last_name}</p>
+                <p className="text-xs text-gray-500">{editStudent.classes?.name || 'No class'}</p>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <p className="text-xs font-medium text-amber-800 mb-1">Status is changing to:</p>
+                <p className="text-sm font-bold text-amber-800 capitalize mb-2">
+                  {STUDENT_STATUSES.find(s => s.value === pendingDepartureInfo.reason)?.label}
+                </p>
+                <p className="text-xs font-medium text-amber-800 mb-1">Outstanding Balance at Departure:</p>
+                {loadingDepartureInfo ? (
+                  <p className="text-sm text-amber-700">⏳ Calculating...</p>
+                ) : (
+                  <p className="text-lg font-bold text-amber-700">
+                    GHS {pendingDepartureInfo.outstanding.toFixed(2)}
+                  </p>
+                )}
+                <p className="text-xs text-amber-600 mt-1">
+                  This amount will be recorded as a <strong>bad debt</strong> and excluded from active statistics.
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => { setShowConfirmDeparture(false); setPendingPayload(null); }}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDepartureAndSave}
+                  disabled={loadingDepartureInfo}
+                  className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium text-sm disabled:opacity-50"
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

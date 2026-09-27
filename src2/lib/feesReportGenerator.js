@@ -16,7 +16,6 @@ function txt(doc, str, x, y, opts = {}) { doc.setTextColor(...(opts.color || BLA
 function hline(doc, y, color = MGRAY, lw = 0.2) { doc.setDrawColor(...color); doc.setLineWidth(lw); doc.line(M, y, A4_W - M, y) }
 function fmtGHS(n) { return 'GHS ' + parseFloat(n || 0).toLocaleString('en-GH', { minimumFractionDigits: 2 }) }
 
-// ─── Étape 1 : charger les classes et les élèves avec les level_id ───
 async function loadAllClassesAndStudents({ classIds, levelIds, academicYear }) {
   let classQuery = supabase.from('classes').select('id, name, level_id').order('name')
   if (classIds?.length) classQuery = classQuery.in('id', classIds)
@@ -31,7 +30,7 @@ async function loadAllClassesAndStudents({ classIds, levelIds, academicYear }) {
     .from('students')
     .select('id, first_name, last_name, class_id')
     .in('class_id', classIdsArr)
-    .eq('active', true)
+    .eq('status', 'active')
 
   const studentIds = (students || []).map(s => s.id)
   const classLevelMap = {}
@@ -42,7 +41,6 @@ async function loadAllClassesAndStudents({ classIds, levelIds, academicYear }) {
   return { classes, students: students || [], studentIds, levelIds: levelIdsArr, studentLevelMap }
 }
 
-// ─── Étape 2 : charger les montants attendus (frais + échéanciers + discounts + overrides + optionnels) ───
 async function loadExpectedData(levelIds, academicYear, dateTo, studentIds, studentLevelMap, term) {
   if (!levelIds.length) return { expectedMap: new Map() }
 
@@ -53,16 +51,13 @@ async function loadExpectedData(levelIds, academicYear, dateTo, studentIds, stud
     .eq('academic_year', academicYear)
     .eq('is_active', true)
 
-  if (term) {
-    feeQuery = feeQuery.eq('term', term)
-  }
+  if (term) feeQuery = feeQuery.eq('term', term)
 
   const { data: fees } = await feeQuery
   if (!fees?.length) return { expectedMap: new Map() }
 
   const feeIds = fees.map(f => f.id)
 
-  // Échéanciers
   const { data: schedules } = await supabase
     .from('fee_schedules')
     .select('amount, fee_structure_id')
@@ -74,7 +69,6 @@ async function loadExpectedData(levelIds, academicYear, dateTo, studentIds, stud
     totalByFee[s.fee_structure_id] = (totalByFee[s.fee_structure_id] || 0) + parseFloat(s.amount || 0)
   })
 
-  // Remises
   const { data: discounts } = await supabase
     .from('student_fee_discounts')
     .select('student_id, fee_structure_id, discount_type, discount_value')
@@ -86,7 +80,6 @@ async function loadExpectedData(levelIds, academicYear, dateTo, studentIds, stud
     discountIndex[d.student_id][d.fee_structure_id] = d
   })
 
-  // Overrides
   const { data: overrides } = await supabase
     .from('student_fee_overrides')
     .select('student_id, fee_structure_id, override_amount')
@@ -97,7 +90,6 @@ async function loadExpectedData(levelIds, academicYear, dateTo, studentIds, stud
     overrideIndex[o.student_id][o.fee_structure_id] = o.override_amount
   })
 
-  // Frais optionnels
   const { data: optionalFees } = await supabase
     .from('student_optional_fees')
     .select('student_id, amount')
@@ -112,14 +104,10 @@ async function loadExpectedData(levelIds, academicYear, dateTo, studentIds, stud
     optionalByStudent[sid] += parseFloat(o.amount || 0)
   })
 
-  // Construction de la map
   const expectedMap = new Map()
   studentIds.forEach(sid => {
     const stuLevel = studentLevelMap[sid]
-    if (!stuLevel) {
-      expectedMap.set(sid, 0)
-      return
-    }
+    if (!stuLevel) { expectedMap.set(sid, 0); return }
     let total = 0
     fees.forEach(f => {
       if (f.level_id !== stuLevel) return
@@ -140,7 +128,6 @@ async function loadExpectedData(levelIds, academicYear, dateTo, studentIds, stud
   return { expectedMap }
 }
 
-// ─── Étape 3 : charger les paiements effectués ───
 async function loadPaymentsData(studentIds, academicYear, dateFrom, dateTo, term) {
   if (!studentIds.length) return new Map()
 
@@ -164,7 +151,6 @@ async function loadPaymentsData(studentIds, academicYear, dateFrom, dateTo, term
   return paidMap
 }
 
-// ─── Fonction principale ────────────────────────────────────
 export async function generateFeesReport({
   academicYear = '2025/2026',
   dateFrom,
@@ -210,7 +196,7 @@ export async function generateFeesReport({
     await loadAllClassesAndStudents({ classIds, levelIds, academicYear })
 
   if (!classes.length || !students.length) {
-    txt(doc, 'No data found.', M, 40, { size: 10, color: RED })
+    txt(doc, 'No active students found.', M, 40, { size: 10, color: RED })
     window.open(URL.createObjectURL(doc.output('blob')), '_blank')
     return
   }
@@ -218,7 +204,6 @@ export async function generateFeesReport({
   const { expectedMap } = await loadExpectedData(loadedLevelIds, academicYear, dateTo, studentIds, studentLevelMap, term)
   const paidMap = await loadPaymentsData(studentIds, academicYear, dateFrom, dateTo, term)
 
-  // Construction des lignes
   const allRows = []
   if (tableType === 'student') {
     for (const stu of students) {
@@ -232,11 +217,7 @@ export async function generateFeesReport({
         type: 'student',
         className: cls?.name || '—',
         studentName: `${stu.first_name} ${stu.last_name}`,
-        status,
-        expected,
-        collected,
-        outstanding,
-        rate,
+        status, expected, collected, outstanding, rate,
         hasSchedule: expected > 0 || collected > 0
       })
     }
@@ -260,10 +241,7 @@ export async function generateFeesReport({
         type: 'class',
         className: cls.name,
         students: agg.students,
-        expected,
-        collected,
-        outstanding,
-        rate,
+        expected, collected, outstanding, rate,
         hasSchedule: expected > 0 || collected > 0
       })
     }
@@ -275,7 +253,6 @@ export async function generateFeesReport({
   const totalOutstanding = totalExpected - totalCollected
   const overallRate = totalExpected > 0 ? Math.min(100, Math.round((totalCollected / totalExpected) * 1000) / 10) : 0
 
-  // ─── Impression PDF ──────────────────────────────────
   let y = 0
   fillRect(doc, 0, 0, A4_W, 28, BLUE)
 
@@ -317,15 +294,26 @@ export async function generateFeesReport({
   })
   y += 16
 
-  // Tableau
   if (tableType === 'student') {
     const colW = [14, 38, 24, 26, 26, 26, 26]
     const colX = [M, M+colW[0], M+colW[0]+colW[1], M+colW[0]+colW[1]+colW[2], M+colW[0]+colW[1]+colW[2]+colW[3], M+colW[0]+colW[1]+colW[2]+colW[3]+colW[4], M+colW[0]+colW[1]+colW[2]+colW[3]+colW[4]+colW[5]]
     const headers = ['Status', 'Student', 'Class', 'Expected', 'Collected', 'Outstanding', 'Rate %']
-    fillRect(doc, M, y, CW, 7, BLUE)
-    headers.forEach((h, i) => { txt(doc, h, i>=3 ? colX[i]+colW[i]-1 : colX[i]+2, y+5, { size:7, style:'bold', color:WHITE, align: i>=3?'right':'left' }) })
-    y += 7
+
+    const drawStudentHeader = () => {
+      fillRect(doc, M, y, CW, 7, BLUE)
+      headers.forEach((h, i) => { txt(doc, h, i>=3 ? colX[i]+colW[i]-1 : colX[i]+2, y+5, { size:7, style:'bold', color:WHITE, align: i>=3?'right':'left' }) })
+      y += 7
+    }
+
+    drawStudentHeader()
+
     rowsToRender.forEach((r, idx) => {
+      if (y > A4_H - 20) {
+        doc.addPage()
+        y = 15
+        drawStudentHeader()
+      }
+
       const bg = idx % 2 === 0 ? WHITE : [250,250,252]
       fillRect(doc, M, y, CW, 6, bg)
       strokeRect(doc, M, y, CW, 6, MGRAY)
@@ -338,6 +326,8 @@ export async function generateFeesReport({
       txt(doc, r.expected > 0 ? `${r.rate.toFixed(1)}%` : '0.0%', colX[6]+colW[6]-1, y+4, { size:7, style:'bold', color: r.rate>=100 ? GREEN : (r.rate>=50 ? AMBER : RED), align:'right' })
       y += 6
     })
+
+    if (y > A4_H - 25) { doc.addPage(); y = 15; }
     hline(doc, y, BLUE, 0.5)
     y += 2
     fillRect(doc, M, y, CW, 8, BLUE_LT)
@@ -353,10 +343,22 @@ export async function generateFeesReport({
     const colW = [40, 20, 30, 30, 30, 30]
     const colX = [M, M+colW[0], M+colW[0]+colW[1], M+colW[0]+colW[1]+colW[2], M+colW[0]+colW[1]+colW[2]+colW[3], M+colW[0]+colW[1]+colW[2]+colW[3]+colW[4]]
     const headers = ['Class', 'Students', 'Expected', 'Collected', 'Outstanding', 'Rate %']
-    fillRect(doc, M, y, CW, 7, BLUE)
-    headers.forEach((h, i) => { txt(doc, h, i>=2 ? colX[i]+colW[i]-1 : colX[i]+2, y+5, { size:7, style:'bold', color:WHITE, align: i>=2?'right':'left' }) })
-    y += 7
+
+    const drawClassHeader = () => {
+      fillRect(doc, M, y, CW, 7, BLUE)
+      headers.forEach((h, i) => { txt(doc, h, i>=2 ? colX[i]+colW[i]-1 : colX[i]+2, y+5, { size:7, style:'bold', color:WHITE, align: i>=2?'right':'left' }) })
+      y += 7
+    }
+
+    drawClassHeader()
+
     rowsToRender.forEach((r, idx) => {
+      if (y > A4_H - 20) {
+        doc.addPage()
+        y = 15
+        drawClassHeader()
+      }
+
       const bg = idx % 2 === 0 ? WHITE : [250,250,252]
       fillRect(doc, M, y, CW, 6, bg)
       strokeRect(doc, M, y, CW, 6, MGRAY)
@@ -368,6 +370,8 @@ export async function generateFeesReport({
       txt(doc, r.expected > 0 ? `${r.rate.toFixed(1)}%` : '0.0%', colX[5]+colW[5]-1, y+4, { size:7, style:'bold', color: r.rate>=100 ? GREEN : (r.rate>=50 ? AMBER : RED), align:'right' })
       y += 6
     })
+
+    if (y > A4_H - 25) { doc.addPage(); y = 15; }
     hline(doc, y, BLUE, 0.5)
     y += 2
     fillRect(doc, M, y, CW, 8, BLUE_LT)

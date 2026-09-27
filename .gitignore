@@ -1,3 +1,4 @@
 node_modules
 .env
-.env.local"update-year.ps1" 
+.env.local
+update-year.ps1

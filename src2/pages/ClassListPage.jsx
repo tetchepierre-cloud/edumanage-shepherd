@@ -60,6 +60,7 @@ export default function ClassListPage() {
       .from('students')
       .select('id, first_name, last_name, gender, date_of_birth, parent_name, parent_phone, active')
       .eq('class_id', classId)
+      .eq('active', true)
       .order('last_name');
     if (error) {
       console.error(error);

@@ -5,16 +5,44 @@ import { useAuthStore } from '../stores/authStore';
 import { CanAct } from '../components/PermissionGate';
 import { Send, History, Users, FileText } from 'lucide-react';
 
-const ACADEMIC_YEARS = ['2024/2025', '2025/2026', '2026/2027'];
 const TERMS = ['Term 1', 'Term 2', 'Term 3'];
+
+function generateAcademicYears() {
+  const now = new Date();
+  const startYear = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+  const years = [];
+  for (let i = -2; i <= 1; i++) {
+    const y = startYear + i;
+    years.push(`${y}/${y + 1}`);
+  }
+  return years;
+}
+
+// ═══════════════════════════════════════════════════════
+// TEMPLATES FINANCIERS AVEC VARIABLES DYNAMIQUES
+// Variables : [StudentName], [Balance], [Term]
+// ═══════════════════════════════════════════════════════
+const FINANCIAL_TEMPLATES = {
+  defaulters:     'Dear Parent of [StudentName], your outstanding balance for [Term] is [Balance]. Kindly settle promptly. Thank you.',
+  zero_payers:    'Dear Parent of [StudentName], no payment has been received for [Term]. Please contact the accounts office. Thank you.',
+  high_debtors:   'Dear Parent of [StudentName], over 50% of [Term] fees remain unpaid ([Balance]). Kindly settle urgently. Thank you.',
+  due_this_month: 'Dear Parent of [StudentName], a fee instalment for [Term] is due this month. Kindly settle on time. Thank you.',
+  fully_paid:     'Dear Parent of [StudentName], thank you for settling [Term] fees in full. We truly appreciate it.',
+};
+
+const ACADEMIC_TEMPLATES = [
+  { name: 'Report Card Ceremony',   text: 'Dear Parent, we invite you to the report card ceremony on [date] at [time]. Please confirm your attendance.' },
+  { name: 'Report Card Available',  text: 'Dear Parent, your child\'s report card is now available on the parent portal. Kindly log in to view it.' },
+  { name: 'PTA Meeting',            text: 'Dear Parent, a PTA meeting is scheduled for [date] at [time]. Your presence is highly appreciated.' },
+];
 
 export default function SMSPage() {
   const { profile } = useAuthStore();
+  const ACADEMIC_YEARS = generateAcademicYears();
 
-  // États pour le formulaire
   const [category, setCategory] = useState('academic');
   const [subCategory, setSubCategory] = useState('all_parents');
-  const [academicYear, setAcademicYear] = useState('2025/2026');
+  const [academicYear, setAcademicYear] = useState(ACADEMIC_YEARS[2]);
   const [term, setTerm] = useState('Term 1');
   const [customRecipients, setCustomRecipients] = useState('');
   const [message, setMessage] = useState('');
@@ -22,20 +50,11 @@ export default function SMSPage() {
   const [statusMessage, setStatusMessage] = useState('');
   const [statusType, setStatusType] = useState('');
 
-  // États pour l'historique
   const [logs, setLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
-  // États pour les listes déroulantes (classes, staff positions)
   const [classes, setClasses] = useState([]);
   const [staffPositions, setStaffPositions] = useState([]);
-
-  // Modèles de messages
-  const templates = [
-    { name: 'Report Card Ceremony', text: 'Dear Parent, we invite you to the report card ceremony on [date] at [time]. Please confirm your attendance.' },
-    { name: 'Fee Payment Reminder', text: 'Dear Parent, this is a reminder that school fees for [month] are due. Please settle your balance as soon as possible.' },
-    { name: 'Report Card Available', text: 'Dear Parent, your child\'s report card is now available on the parent portal. Kindly log in to view it.' },
-  ];
 
   useEffect(() => {
     fetchLogs();
@@ -54,217 +73,261 @@ export default function SMSPage() {
   };
 
   const fetchClasses = async () => {
-    const { data } = await supabase
-      .from('classes')
-      .select('id, name, levels(name)')
-      .order('name');
+    const { data } = await supabase.from('classes').select('id, name, level_id').order('name');
     setClasses(data || []);
   };
 
   const fetchStaffPositions = async () => {
-    const { data } = await supabase
-      .from('staff')
-      .select('position')
-      .eq('active', true)
-      .not('position', 'is', null);
+    const { data } = await supabase.from('staff').select('position').eq('active', true).not('position', 'is', null);
     const unique = [...new Set(data?.map(s => s.position) || [])].sort();
     setStaffPositions(unique);
   };
 
   const fetchLogs = async () => {
     setLoadingLogs(true);
-    const { data, error } = await supabase
-      .from('sms_logs')
-      .select('*')
-      .order('sent_at', { ascending: false })
-      .limit(50);
+    const { data, error } = await supabase.from('sms_logs').select('*').order('sent_at', { ascending: false }).limit(50);
     if (!error) setLogs(data || []);
     setLoadingLogs(false);
   };
 
-  // ── Récupération des destinataires ──
+  // ═══════════════════════════════════════════════════════
+  // PERSONNALISATION DU MESSAGE PAR ÉLÈVE
+  // ═══════════════════════════════════════════════════════
+  const personalizeMessage = (template, recipient, termValue) => {
+    if (!recipient?.studentName) return template;
+
+    const balanceStr = recipient.balance !== undefined
+      ? `GHS ${parseFloat(recipient.balance).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : '';
+
+    return template
+      .replace(/\[StudentName\]/g, recipient.studentName || '')
+      .replace(/\[Balance\]/g, balanceStr)
+      .replace(/\[Term\]/g, termValue || '');
+  };
+
+  // ═══════════════════════════════════════════════════════
+  // CALCUL DES SOLDES EN BATCH
+  // ═══════════════════════════════════════════════════════
+  async function calculateBalancesForStudents(students, academicYear, term) {
+    if (!students.length) return {};
+
+    const studentIds = students.map(s => s.id);
+    const levelIds = [...new Set(students.map(s => s.level_id).filter(Boolean))];
+    if (!levelIds.length) return {};
+
+    let feeQuery = supabase
+      .from('fee_structure')
+      .select('id, amount, level_id')
+      .in('level_id', levelIds)
+      .eq('academic_year', academicYear)
+      .eq('is_active', true);
+    if (term) feeQuery = feeQuery.eq('term', term);
+    const { data: fees } = await feeQuery;
+
+    const feeIds = (fees || []).map(f => f.id);
+
+    const [schedulesRes, discountsRes, overridesRes, optionalsRes, paymentsRes] = await Promise.all([
+      supabase.from('fee_schedules').select('amount, fee_structure_id, due_date').in('fee_structure_id', feeIds),
+      supabase.from('student_fee_discounts').select('student_id, fee_structure_id, discount_type, discount_value').in('student_id', studentIds),
+      supabase.from('student_fee_overrides').select('student_id, fee_structure_id, override_amount').in('student_id', studentIds),
+      supabase.from('student_optional_fees').select('student_id, amount').in('student_id', studentIds).eq('academic_year', academicYear).eq('is_active', true),
+      supabase.from('fee_payments').select('student_id, amount').in('student_id', studentIds).eq('academic_year', academicYear).in('status', ['paid', 'partial']),
+    ]);
+
+    const feesByLevel = {};
+    (fees || []).forEach(f => {
+      if (!feesByLevel[f.level_id]) feesByLevel[f.level_id] = [];
+      feesByLevel[f.level_id].push(f);
+    });
+
+    const schedSumByFee = {};
+    const schedDatesByFee = {};
+    (schedulesRes.data || []).forEach(s => {
+      schedSumByFee[s.fee_structure_id] = (schedSumByFee[s.fee_structure_id] || 0) + parseFloat(s.amount || 0);
+      if (!schedDatesByFee[s.fee_structure_id]) schedDatesByFee[s.fee_structure_id] = [];
+      if (s.due_date) schedDatesByFee[s.fee_structure_id].push(s.due_date);
+    });
+
+    const discBySF = {};
+    (discountsRes.data || []).forEach(d => { discBySF[`${d.student_id}|${d.fee_structure_id}`] = d; });
+
+    const ovBySF = {};
+    (overridesRes.data || []).forEach(o => { ovBySF[`${o.student_id}|${o.fee_structure_id}`] = o.override_amount; });
+
+    const optByStudent = {};
+    (optionalsRes.data || []).forEach(o => {
+      optByStudent[o.student_id] = (optByStudent[o.student_id] || 0) + parseFloat(o.amount || 0);
+    });
+
+    const paidByStudent = {};
+    (paymentsRes.data || []).forEach(p => {
+      paidByStudent[p.student_id] = (paidByStudent[p.student_id] || 0) + parseFloat(p.amount || 0);
+    });
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+
+    const results = {};
+    students.forEach(stu => {
+      const levelId = stu.level_id;
+      if (!levelId) {
+        results[stu.id] = { expected: 0, paid: 0, balance: 0, hasDueThisMonth: false };
+        return;
+      }
+
+      const levelFees = feesByLevel[levelId] || [];
+      let expected = 0;
+      let hasDueThisMonth = false;
+
+      levelFees.forEach(f => {
+        let amount = ovBySF[`${stu.id}|${f.id}`] !== undefined
+          ? parseFloat(ovBySF[`${stu.id}|${f.id}`])
+          : (schedSumByFee[f.id] || parseFloat(f.amount));
+
+        const disc = discBySF[`${stu.id}|${f.id}`];
+        if (disc) {
+          if (disc.discount_type === 'fixed') amount = Math.max(0, amount - parseFloat(disc.discount_value));
+          else amount *= (1 - parseFloat(disc.discount_value) / 100);
+        }
+        expected += amount;
+
+        const dates = schedDatesByFee[f.id] || [];
+        dates.forEach(dueDate => {
+          if (!dueDate) return;
+          const d = new Date(dueDate);
+          if (d.getFullYear() === currentYear && d.getMonth() === currentMonth) {
+            hasDueThisMonth = true;
+          }
+        });
+      });
+
+      expected += optByStudent[stu.id] || 0;
+      const paid = paidByStudent[stu.id] || 0;
+      const balance = Math.max(0, expected - paid);
+
+      results[stu.id] = {
+        expected: parseFloat(expected.toFixed(2)),
+        paid: parseFloat(paid.toFixed(2)),
+        balance: parseFloat(balance.toFixed(2)),
+        hasDueThisMonth,
+      };
+    });
+
+    return results;
+  }
+
   const getRecipients = async () => {
     let numbers = [];
 
     if (category === 'custom') {
       const raw = customRecipients.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
-      numbers = raw.map(n => ({ number: n, name: 'Custom' }));
-      return numbers;
+      return raw.map(n => ({ number: n, name: 'Custom' }));
     }
 
-    // ── ACADEMIC ──
     if (category === 'academic') {
-      // Récupérer tous les étudiants actifs avec classe et niveau
       const { data: students, error } = await supabase
         .from('students')
-        .select('id, first_name, last_name, parent_phone, class_id, classes(id, name, levels(name))')
-        .eq('active', true)
+        .select('id, first_name, last_name, parent_phone, class_id, classes(name, level_id)')
+        .eq('status', 'active')
         .not('parent_phone', 'is', null);
 
-      if (error) {
-        console.error('Academic query error:', error);
-        return [];
-      }
+      if (error) return [];
 
-      let filtered = students || [];
+      let filtered = (students || []).map(s => ({
+        ...s,
+        level_id: s.classes?.level_id,
+        class_name: s.classes?.name,
+      }));
 
-      // Filtrer en mémoire selon le sous-groupe
       if (subCategory === 'kg') {
-        filtered = filtered.filter(s => 
-          s.classes?.levels?.name && s.classes.levels.name.toLowerCase().includes('kg')
-        );
+        filtered = filtered.filter(s => s.class_name?.toLowerCase().includes('kg'));
       } else if (subCategory === 'lower_primary') {
-        filtered = filtered.filter(s => 
-          s.classes?.levels?.name && s.classes.levels.name.toLowerCase().includes('primary') &&
-          ['P1', 'P2', 'P3'].includes(s.classes?.name)
-        );
+        filtered = filtered.filter(s => ['Primary 1', 'Primary 2', 'Primary 3'].includes(s.class_name));
       } else if (subCategory === 'upper_primary') {
-        filtered = filtered.filter(s => 
-          s.classes?.levels?.name && s.classes.levels.name.toLowerCase().includes('primary') &&
-          ['P4', 'P5', 'P6'].includes(s.classes?.name)
-        );
+        filtered = filtered.filter(s => ['Primary 4', 'Primary 5', 'Primary 6'].includes(s.class_name));
       } else if (subCategory === 'jhs') {
-        filtered = filtered.filter(s => 
-          s.classes?.levels?.name && s.classes.levels.name.toLowerCase().includes('jhs')
-        );
+        filtered = filtered.filter(s => s.class_name?.toLowerCase().includes('jhs'));
       } else if (subCategory.startsWith('class_')) {
         const classId = subCategory.replace('class_', '');
         filtered = filtered.filter(s => s.class_id === classId);
       }
-      // 'all_parents' => pas de filtre
 
       numbers = filtered.map(s => ({
         number: s.parent_phone.trim(),
         name: `Parent of ${s.first_name} ${s.last_name}`,
+        studentName: `${s.first_name} ${s.last_name}`,
       }));
     }
 
-    // ── FINANCIAL ──
     if (category === 'financial') {
-      // Récupérer tous les étudiants actifs avec leur classe
       const { data: students, error: studentsErr } = await supabase
         .from('students')
-        .select('id, first_name, last_name, parent_phone, class_id, classes(levels(name))')
-        .eq('active', true)
+        .select('id, first_name, last_name, parent_phone, class_id, classes(name, level_id)')
+        .eq('status', 'active')
         .not('parent_phone', 'is', null);
+
       if (studentsErr) return [];
 
-      // Pour chaque étudiant, calculer le solde restant
-      const studentBalances = await Promise.all(
-        students.map(async (student) => {
-          const balance = await getStudentBalance(student.id, academicYear, term);
-          return { ...student, balance };
-        })
-      );
+      const enriched = (students || []).map(s => ({ ...s, level_id: s.classes?.level_id }));
+      const balances = await calculateBalancesForStudents(enriched, academicYear, term);
 
-      let filtered = studentBalances;
+      let filtered = students || [];
+
       if (subCategory === 'defaulters') {
-        filtered = filtered.filter(s => s.balance > 0);
-      } else if (subCategory === 'one_month_due') {
-        // Pour l'instant, même logique que defaulters (à affiner si nécessaire)
-        filtered = filtered.filter(s => s.balance > 0);
-      } else if (subCategory === 'two_months_due') {
-        filtered = filtered.filter(s => s.balance > 0);
+        filtered = filtered.filter(s => (balances[s.id]?.balance || 0) > 0);
+      } else if (subCategory === 'zero_payers') {
+        filtered = filtered.filter(s => {
+          const b = balances[s.id];
+          return b && b.expected > 0 && b.paid === 0;
+        });
+      } else if (subCategory === 'high_debtors') {
+        filtered = filtered.filter(s => {
+          const b = balances[s.id];
+          if (!b || b.expected === 0) return false;
+          return (b.balance / b.expected) >= 0.5;
+        });
+      } else if (subCategory === 'due_this_month') {
+        filtered = filtered.filter(s => {
+          const b = balances[s.id];
+          return b && b.hasDueThisMonth && b.balance > 0;
+        });
       } else if (subCategory === 'fully_paid') {
-        filtered = filtered.filter(s => s.balance <= 0);
-      } else if (subCategory === 'scholarship') {
-        // Si vous avez un champ scholarship, filtrez ici, sinon on renvoie vide
-        filtered = [];
+        filtered = filtered.filter(s => {
+          const b = balances[s.id];
+          return b && b.expected > 0 && b.balance === 0;
+        });
       }
 
       numbers = filtered.map(s => ({
         number: s.parent_phone.trim(),
         name: `Parent of ${s.first_name} ${s.last_name}`,
+        studentName: `${s.first_name} ${s.last_name}`,
+        balance: balances[s.id]?.balance || 0,
       }));
     }
 
-    // ── STAFF ──
     if (category === 'staff') {
-      let query = supabase
-        .from('staff')
-        .select('first_name, last_name, phone')
-        .eq('active', true)
-        .not('phone', 'is', null);
-
-      if (subCategory === 'teaching') {
-        query = query.in('position', ['Teacher', 'Headmaster', 'Assistant Teacher']);
-      } else if (subCategory === 'non_teaching') {
-        query = query.in('position', ['Accountant', 'Secretary', 'Admin', 'Manager']);
-      } else if (subCategory === 'support') {
-        query = query.in('position', ['Security', 'Janitor', 'Cook', 'Driver', 'Groundsman']);
-      } else if (subCategory.startsWith('position_')) {
+      let query = supabase.from('staff').select('first_name, last_name, phone').eq('active', true).not('phone', 'is', null);
+      if (subCategory === 'teaching') query = query.in('position', ['Teacher', 'Headmaster', 'Assistant Teacher']);
+      else if (subCategory === 'non_teaching') query = query.in('position', ['Accountant', 'Secretary', 'Admin', 'Manager']);
+      else if (subCategory === 'support') query = query.in('position', ['Security', 'Janitor', 'Cook', 'Driver', 'Groundsman']);
+      else if (subCategory.startsWith('position_')) {
         const pos = subCategory.replace('position_', '');
         query = query.eq('position', pos);
       }
-      // 'all_staff' => pas de filtre
-
       const { data, error } = await query;
       if (error) return [];
-      numbers = (data || []).map(s => ({
-        number: s.phone.trim(),
-        name: `${s.first_name} ${s.last_name}`,
-      }));
+      numbers = (data || []).map(s => ({ number: s.phone.trim(), name: `${s.first_name} ${s.last_name}` }));
     }
 
-    // Nettoyer les numéros (au moins 10 chiffres)
-    const validNumbers = numbers.filter(({ number }) => {
+    return numbers.filter(({ number }) => {
       const cleaned = number.replace(/\s/g, '');
       return /^\d{10,}$/.test(cleaned);
     });
-
-    return validNumbers;
   };
 
-  // Fonction utilitaire : calcul du solde d'un étudiant pour une année/terme donnés
-  const getStudentBalance = async (studentId, year, term) => {
-    // 1) Récupérer le niveau de l'étudiant
-    const { data: student } = await supabase
-      .from('students')
-      .select('class_id, classes(levels(id))')
-      .eq('id', studentId)
-      .single();
-    if (!student?.classes?.levels?.id) return 0;
-    const levelId = student.classes.levels.id;
-
-    // 2) Récupérer les frais attendus pour ce niveau, année et terme
-    const { data: feeStructures } = await supabase
-      .from('fee_structure')
-      .select('id, amount, fee_name')
-      .eq('level_id', levelId)
-      .eq('academic_year', year)
-      .eq('term', term)
-      .eq('is_active', true);
-
-    if (!feeStructures || feeStructures.length === 0) return 0;
-
-    // 3) Récupérer les tranches (fee_schedules)
-    const feeIds = feeStructures.map(f => f.id);
-    const { data: schedules } = await supabase
-      .from('fee_schedules')
-      .select('fee_structure_id, amount')
-      .in('fee_structure_id', feeIds);
-
-    const totalExpected = feeStructures.reduce((sum, fee) => {
-      const feeSchedules = (schedules || []).filter(s => s.fee_structure_id === fee.id);
-      const totalSched = feeSchedules.reduce((s, sc) => s + parseFloat(sc.amount || 0), 0);
-      return sum + totalSched;
-    }, 0);
-
-    // 4) Récupérer les paiements effectués
-    const { data: payments } = await supabase
-      .from('fee_payments')
-      .select('amount')
-      .eq('student_id', studentId)
-      .eq('academic_year', year)
-      .eq('term', term)
-      .in('status', ['paid', 'partial']);
-
-    const totalPaid = (payments || []).reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
-
-    return Math.max(0, totalExpected - totalPaid);
-  };
-
-  // ── Envoyer les SMS ──
   const handleSend = async () => {
     if (!message.trim()) {
       setStatusMessage('Please enter a message.');
@@ -279,8 +342,7 @@ export default function SMSPage() {
       return;
     }
 
-    const confirmMsg = `You are about to send this message to ${recipients.length} recipient(s). Confirm?`;
-    if (!window.confirm(confirmMsg)) return;
+    if (!window.confirm(`You are about to send this message to ${recipients.length} recipient(s). Confirm?`)) return;
 
     setSending(true);
     setStatusMessage('');
@@ -291,40 +353,31 @@ export default function SMSPage() {
     for (const rec of recipients) {
       try {
         const cleanedNumber = rec.number.replace(/\s/g, '');
+        const personalizedMessage = personalizeMessage(message.trim(), rec, term);
+
         const response = await supabase.functions.invoke('send-sms', {
-          body: {
-            phone: cleanedNumber,
-            message: message.trim(),
-          },
+          body: { phone: cleanedNumber, message: personalizedMessage },
         });
 
+        const logBase = {
+          recipient_number: cleanedNumber,
+          message: personalizedMessage,
+          sent_by: profile?.id,
+          recipient_type: category === 'staff' ? 'staff' : 'parent',
+          recipient_name: rec.name || '—',
+          group_name: subCategory || category,
+          academic_year: academicYear,
+          term: (category === 'academic' || category === 'financial') ? term : null,
+        };
+
         if (response.error) {
-          console.error(`Failed for ${cleanedNumber}:`, response.error);
           failCount++;
-          await supabase.from('sms_logs').insert({
-            recipient_number: cleanedNumber,
-            message: message.trim(),
-            status: 'failed',
-            sent_by: profile?.id,
-            recipient_type: category === 'staff' ? 'staff' : 'parent',
-            recipient_name: rec.name || '—',
-            group_name: subCategory || category,
-            error_message: response.error.message || 'Unknown error',
-          });
+          await supabase.from('sms_logs').insert({ ...logBase, status: 'failed', error_message: response.error.message || 'Unknown error' });
         } else {
           successCount++;
-          await supabase.from('sms_logs').insert({
-            recipient_number: cleanedNumber,
-            message: message.trim(),
-            status: 'sent',
-            sent_by: profile?.id,
-            recipient_type: category === 'staff' ? 'staff' : 'parent',
-            recipient_name: rec.name || '—',
-            group_name: subCategory || category,
-          });
+          await supabase.from('sms_logs').insert({ ...logBase, status: 'sent' });
         }
       } catch (err) {
-        console.error('Network error:', err);
         failCount++;
         await supabase.from('sms_logs').insert({
           recipient_number: rec.number,
@@ -334,32 +387,26 @@ export default function SMSPage() {
           recipient_type: category === 'staff' ? 'staff' : 'parent',
           recipient_name: rec.name || '—',
           group_name: subCategory || category,
+          academic_year: academicYear,
+          term: (category === 'academic' || category === 'financial') ? term : null,
           error_message: err.message || 'Network error',
         });
       }
     }
 
     await fetchLogs();
-
     setStatusMessage(`${successCount} SMS sent, ${failCount} failed.`);
     setStatusType(successCount > 0 ? 'success' : 'error');
     setSending(false);
 
-    if (successCount > 0) {
-      setMessage('');
-      setCustomRecipients('');
-    }
+    if (successCount > 0) { setMessage(''); setCustomRecipients(''); }
   };
 
   const applyTemplate = (text) => setMessage(text);
 
-  // ── Options dynamiques pour les sous-groupes ──
   const getSubOptions = () => {
     if (category === 'academic') {
-      const classOptions = classes.map(c => ({
-        value: `class_${c.id}`,
-        label: `${c.name} (${c.levels?.name || 'No level'})`,
-      }));
+      const classOptions = classes.map(c => ({ value: `class_${c.id}`, label: c.name }));
       return [
         { value: 'all_parents', label: 'All Parents' },
         { value: 'kg', label: 'KG (Nursery & KG)' },
@@ -371,18 +418,15 @@ export default function SMSPage() {
     }
     if (category === 'financial') {
       return [
-        { value: 'defaulters', label: 'All Defaulters (balance > 0)' },
-        { value: 'one_month_due', label: '1 Month Due (approx.)' },
-        { value: 'two_months_due', label: '2+ Months Due' },
-        { value: 'fully_paid', label: 'Fully Paid' },
-        { value: 'scholarship', label: 'Scholarship Holders' },
+        { value: 'defaulters',     label: 'All Defaulters (balance > 0)' },
+        { value: 'zero_payers',    label: 'Zero Payers (no payment)' },
+        { value: 'high_debtors',   label: 'High Debtors (≥ 50% unpaid)' },
+        { value: 'due_this_month', label: 'Due This Month' },
+        { value: 'fully_paid',     label: 'Fully Paid' },
       ];
     }
     if (category === 'staff') {
-      const positionOptions = staffPositions.map(pos => ({
-        value: `position_${pos}`,
-        label: pos,
-      }));
+      const positionOptions = staffPositions.map(pos => ({ value: `position_${pos}`, label: pos }));
       return [
         { value: 'all_staff', label: 'All Staff' },
         { value: 'teaching', label: 'Teaching Staff' },
@@ -392,6 +436,23 @@ export default function SMSPage() {
       ];
     }
     return [];
+  };
+
+  const applySuggestedTemplate = () => {
+    if (category === 'financial' && FINANCIAL_TEMPLATES[subCategory]) {
+      setMessage(FINANCIAL_TEMPLATES[subCategory]);
+    }
+  };
+
+  const getSubCategoryShortLabel = () => {
+    const map = {
+      defaulters:     'Defaulters',
+      zero_payers:    'Zero Payers',
+      high_debtors:   'High Debtors',
+      due_this_month: 'Due This Month',
+      fully_paid:     'Fully Paid',
+    };
+    return map[subCategory] || subCategory;
   };
 
   return (
@@ -414,20 +475,21 @@ export default function SMSPage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* ── Formulaire ── */}
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white rounded-xl shadow p-6 space-y-4">
             <h2 className="font-semibold text-gray-800">Compose Message</h2>
 
-            {/* Catégorie et sous-catégorie */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                 <select
                   value={category}
                   onChange={(e) => {
-                    setCategory(e.target.value);
-                    setSubCategory(e.target.value === 'academic' ? 'all_parents' : 'all_staff');
+                    const newCat = e.target.value;
+                    setCategory(newCat);
+                    if (newCat === 'academic') setSubCategory('all_parents');
+                    else if (newCat === 'financial') setSubCategory('defaulters');
+                    else if (newCat === 'staff') setSubCategory('all_staff');
                   }}
                   className="w-full border rounded-lg px-3 py-2 text-sm"
                 >
@@ -455,33 +517,23 @@ export default function SMSPage() {
               </div>
             </div>
 
-            {/* Champs pour Academic / Financial */}
             {(category === 'academic' || category === 'financial') && (
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                  <select
-                    value={academicYear}
-                    onChange={(e) => setAcademicYear(e.target.value)}
-                    className="w-full border rounded-lg px-3 py-2 text-sm"
-                  >
+                  <select value={academicYear} onChange={(e) => setAcademicYear(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
                     {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Term</label>
-                  <select
-                    value={term}
-                    onChange={(e) => setTerm(e.target.value)}
-                    className="w-full border rounded-lg px-3 py-2 text-sm"
-                  >
+                  <select value={term} onChange={(e) => setTerm(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
                     {TERMS.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
               </div>
             )}
 
-            {/* Custom numbers */}
             {category === 'custom' && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -497,7 +549,6 @@ export default function SMSPage() {
               </div>
             )}
 
-            {/* Message */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Message</label>
               <textarea
@@ -509,16 +560,18 @@ export default function SMSPage() {
                 className="w-full border rounded-lg px-3 py-2 text-sm"
               />
               <div className="flex justify-between text-xs text-gray-400 mt-1">
-                <span>{message.length} characters</span>
+                <span className={message.length > 160 ? 'text-amber-600 font-medium' : ''}>
+                  {message.length} characters
+                </span>
                 <span>{Math.ceil(message.length / 160)} SMS</span>
               </div>
             </div>
 
-            {/* Templates */}
+            {/* ── TEMPLATES ── */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Templates</label>
               <div className="flex flex-wrap gap-2">
-                {templates.map((t, idx) => (
+                {category === 'academic' && ACADEMIC_TEMPLATES.map((t, idx) => (
                   <button
                     key={idx}
                     onClick={() => applyTemplate(t.text)}
@@ -527,6 +580,15 @@ export default function SMSPage() {
                     {t.name}
                   </button>
                 ))}
+
+                {category === 'financial' && FINANCIAL_TEMPLATES[subCategory] && (
+                  <button
+                    onClick={applySuggestedTemplate}
+                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs px-3 py-1 rounded-full"
+                  >
+                    {getSubCategoryShortLabel()}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -543,45 +605,39 @@ export default function SMSPage() {
           </div>
         </div>
 
-        {/* ── Info ── */}
         <div className="lg:col-span-1 space-y-6">
           <div className="bg-white rounded-xl shadow p-6">
             <h3 className="font-semibold text-gray-800 flex items-center gap-2">
               <Users size={18} /> About SMS
             </h3>
             <ul className="mt-3 space-y-2 text-sm text-gray-600">
-              <li className="flex items-start gap-2">
-                <span className="text-blue-600">•</span>
-                <span>Each SMS can contain up to <strong>160 characters</strong>.</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-blue-600">•</span>
-                <span>Long messages are concatenated (up to 1600 characters).</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-blue-600">•</span>
-                <span>Phone numbers must have at least <strong>10 digits</strong>.</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-blue-600">•</span>
-                <span>Only <strong>director</strong> and <strong>admin</strong> can send SMS.</span>
-              </li>
+              <li className="flex items-start gap-2"><span className="text-blue-600">•</span><span>Each SMS can contain up to <strong>160 characters</strong>.</span></li>
+              <li className="flex items-start gap-2"><span className="text-blue-600">•</span><span>Long messages are concatenated (up to 1600 characters).</span></li>
+              <li className="flex items-start gap-2"><span className="text-blue-600">•</span><span>Phone numbers must have at least <strong>10 digits</strong>.</span></li>
+              <li className="flex items-start gap-2"><span className="text-blue-600">•</span><span>Only <strong>director</strong> and <strong>admin</strong> can send SMS.</span></li>
             </ul>
           </div>
           <div className="bg-white rounded-xl shadow p-6">
             <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-              <FileText size={18} /> Quick Tips
+              <FileText size={18} /> Financial Groups
             </h3>
             <ul className="mt-3 space-y-2 text-sm text-gray-600">
-              <li>• Personalize messages with student names if needed.</li>
-              <li>• Avoid using special characters that may affect delivery.</li>
-              <li>• Check the history to confirm delivery status.</li>
+              <li>• <strong>Defaulters</strong> — outstanding balance</li>
+              <li>• <strong>Zero Payers</strong> — no payment made</li>
+              <li>• <strong>High Debtors</strong> — ≥ 50% unpaid</li>
+              <li>• <strong>Due This Month</strong> — instalment due this month</li>
+              <li>• <strong>Fully Paid</strong> — fully settled</li>
             </ul>
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              <p className="text-xs text-gray-500">
+                <strong>Variables available:</strong><br />
+                <code className="text-blue-600">[StudentName]</code> · <code className="text-blue-600">[Balance]</code> · <code className="text-blue-600">[Term]</code>
+              </p>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* ── Historique ── */}
       <div className="bg-white rounded-xl shadow overflow-hidden">
         <div className="px-6 py-4 border-b flex justify-between items-center">
           <h2 className="font-semibold text-gray-800 flex items-center gap-2">
@@ -601,6 +657,7 @@ export default function SMSPage() {
                   <th className="text-left px-4 py-3">Recipient</th>
                   <th className="text-left px-4 py-3">Number</th>
                   <th className="text-left px-4 py-3">Message</th>
+                  <th className="text-left px-4 py-3">Period</th>
                   <th className="text-center px-4 py-3">Status</th>
                   <th className="text-center px-4 py-3">Sent At</th>
                 </tr>
@@ -611,6 +668,9 @@ export default function SMSPage() {
                     <td className="px-4 py-2 text-gray-700">{log.recipient_name || '—'}</td>
                     <td className="px-4 py-2 text-gray-700">{log.recipient_number}</td>
                     <td className="px-4 py-2 text-gray-700 truncate max-w-xs">{log.message}</td>
+                    <td className="px-4 py-2 text-gray-500 text-xs">
+                      {log.academic_year ? `${log.academic_year}${log.term ? ` · ${log.term}` : ''}` : '—'}
+                    </td>
                     <td className="px-4 py-2 text-center">
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
                         log.status === 'sent' ? 'bg-green-100 text-green-700' :

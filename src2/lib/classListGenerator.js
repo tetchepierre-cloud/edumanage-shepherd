@@ -75,7 +75,7 @@ export async function generateClassListPDF({ className, students, school }) {
   y += 8;
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Academic Year: 2025/2026   |   Total: ${students.length} pupils`, pageW / 2, y, { align: 'center' });
+  doc.text(`Academic Year: 2026/2027   |   Total: ${students.length} pupils`, pageW / 2, y, { align: 'center' });
   y += 5;
   doc.line(margin, y, pageW - margin, y);
   y += 10;

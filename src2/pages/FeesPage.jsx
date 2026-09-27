@@ -94,6 +94,7 @@ export default function FeesPage() {
   const [showClassBalanceModal, setShowClassBalanceModal] = useState(false)
   const [selectedBalanceClass, setSelectedBalanceClass] = useState('')
   const [selectedBalanceYear, setSelectedBalanceYear] = useState('2025/2026')
+  const [balanceReportMode, setBalanceReportMode] = useState('class')
   
   // États pour la modale OUTSTANDING
   const [showOutstandingModal, setShowOutstandingModal] = useState(false);
@@ -730,8 +731,92 @@ export default function FeesPage() {
       )}
 
       {showClassBalanceModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-md"><div className="p-6 border-b flex items-center justify-between"><h3 className="text-lg font-bold text-gray-900">📊 Class Balance Report</h3><button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button></div><div className="p-6 space-y-4"><div><label className="block text-sm font-medium text-gray-700 mb-1">Class</label><select value={selectedBalanceClass} onChange={e => setSelectedBalanceClass(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">-- Select Class --</option>{classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label><select value={selectedBalanceYear} onChange={e => setSelectedBalanceYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">{ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label><select value={balanceReportTerm} onChange={e => setBalanceReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Terms</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></div><button onClick={async () => { if (!selectedBalanceClass) return; setShowClassBalanceModal(false); const className = classes.find(c => c.id === selectedBalanceClass)?.name || 'Class'; await generateClassBalanceReport({ className, classId: selectedBalanceClass, academicYear: selectedBalanceYear, schoolConfig, term: balanceReportTerm || null }); }} className="w-full bg-teal-600 text-white py-2 rounded-lg font-medium hover:bg-teal-700">Generate Report</button></div></div></div>
-      )}
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+      <div className="p-6 border-b flex items-center justify-between">
+        <h3 className="text-lg font-bold text-gray-900">📊 Balance Report</h3>
+        <button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+      </div>
+      <div className="p-6 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Report Scope</label>
+          <select
+            value={balanceReportMode}
+            onChange={e => setBalanceReportMode(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+          >
+            <option value="class">📚 Specific Class (Student Detail)</option>
+            <option value="school">🏫 Whole School (Summary by Class)</option>
+          </select>
+        </div>
+
+        {balanceReportMode === 'class' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Class</label>
+            <select
+              value={selectedBalanceClass}
+              onChange={e => setSelectedBalanceClass(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            >
+              <option value="">-- Select Class --</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        )}
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+          <select value={selectedBalanceYear} onChange={e => setSelectedBalanceYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+            {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
+          <select value={balanceReportTerm} onChange={e => setBalanceReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+            <option value="">All Terms</option>
+            <option value="Term 1">Term 1</option>
+            <option value="Term 2">Term 2</option>
+            <option value="Term 3">Term 3</option>
+          </select>
+        </div>
+
+        <div className="flex gap-3 pt-2">
+          <button
+            type="button"
+            onClick={() => setShowClassBalanceModal(false)}
+            className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={async () => {
+              if (balanceReportMode === 'class' && !selectedBalanceClass) {
+                alert('Please select a class.');
+                return;
+              }
+              setShowClassBalanceModal(false);
+              const className = balanceReportMode === 'class'
+                ? classes.find(c => c.id === selectedBalanceClass)?.name
+                : null;
+              await generateClassBalanceReport({
+                mode: balanceReportMode,
+                className,
+                classId: balanceReportMode === 'class' ? selectedBalanceClass : null,
+                academicYear: selectedBalanceYear,
+                schoolConfig,
+                term: balanceReportTerm || null,
+              });
+            }}
+            className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 text-sm"
+          >
+            Generate Report
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
 
       {/* ── Modal Outstanding ── */}
       {showOutstandingModal && (

@@ -7,16 +7,16 @@ function fmt(n) {
 }
 
 export async function generateOutstandingReport(minPercent = 0, academicYear = '2025/2026') {
-  console.log('🟢 Chargement des données...');
+  console.log('🟢 Loading data...');
 
-  // 1. Récupérer tous les élèves avec leur classe et level_id
+  // 1. Get only ACTIVE students
   const { data: students, error: studentsError } = await supabase
     .from('students')
     .select('id, first_name, last_name, class_id, classes(name, level_id)')
-    .eq('active', true);
+    .eq('status', 'active');
 
   if (studentsError || !students?.length) {
-    alert('No students found.');
+    alert('No active students found.');
     return;
   }
 
@@ -30,7 +30,7 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
 
   const allTerms = ['Term 1', 'Term 2', 'Term 3'];
 
-  // 2. Charger tous les frais obligatoires pour ces niveaux
+  // 2. Load all mandatory fees
   const { data: allFees } = await supabase
     .from('fee_structure')
     .select('id, amount, level_id, term')
@@ -38,26 +38,23 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
     .eq('academic_year', academicYear)
     .eq('is_active', true);
 
-  // 3. Charger tous les échéanciers pour ces frais
   const feeIds = (allFees || []).map(f => f.id);
+
   const { data: allSchedules } = await supabase
     .from('fee_schedules')
     .select('amount, fee_structure_id, due_date')
     .in('fee_structure_id', feeIds);
 
-  // 4. Charger toutes les remises pour ces élèves
   const { data: allDiscounts } = await supabase
     .from('student_fee_discounts')
     .select('student_id, fee_structure_id, discount_type, discount_value')
     .in('student_id', studentIds);
 
-  // 5. Charger tous les overrides pour ces élèves
   const { data: allOverrides } = await supabase
     .from('student_fee_overrides')
     .select('student_id, fee_structure_id, override_amount')
     .in('student_id', studentIds);
 
-  // 6. Charger tous les frais optionnels pour ces élèves
   const { data: allOptional } = await supabase
     .from('student_optional_fees')
     .select('student_id, amount, term')
@@ -65,7 +62,6 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
     .eq('academic_year', academicYear)
     .eq('is_active', true);
 
-  // 7. Charger tous les paiements pour ces élèves
   const { data: allPayments } = await supabase
     .from('fee_payments')
     .select('student_id, amount, term')
@@ -73,9 +69,15 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
     .eq('academic_year', academicYear)
     .in('status', ['paid', 'partial']);
 
-  console.log('✅ Données chargées, calcul en cours...');
+  // 3. Load DEPARTED students (status != 'active') — compute their bad debts dynamically
+  const { data: departedStudents } = await supabase
+    .from('students')
+    .select('id, first_name, last_name, status, departure_date, class_id, classes(name, level_id)')
+    .neq('status', 'active');
 
-  // ---- Indexation en mémoire ----
+  console.log('✅ Data loaded, calculating...');
+
+  // ---- Indexing ----
   const feesByLevelTerm = {};
   (allFees || []).forEach(f => {
     const key = `${f.level_id}|${f.term}`;
@@ -113,7 +115,7 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
     paymentsByStudentTerm[key] = (paymentsByStudentTerm[key] || 0) + parseFloat(p.amount || 0);
   });
 
-  // ---- Calcul des soldes ----
+  // ---- Balance calculation for ACTIVE students ----
   const results = [];
 
   for (const student of students) {
@@ -127,10 +129,8 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
       let mandatoryExpected = 0;
       fees.forEach(f => {
         const schedules = schedulesByFee[f.id] || [];
-        // On prend la somme des échéanciers jusqu'à la fin du terme (approximatif)
-        // Pour simplifier, on prend tout l'échéancier (le rapport Outstanding est pour toute l'année)
         let amount = schedules.reduce((sum, s) => sum + parseFloat(s.amount || 0), 0);
-        if (amount === 0) amount = parseFloat(f.amount); // fallback
+        if (amount === 0) amount = parseFloat(f.amount);
 
         const overrideKey = `${student.id}|${f.id}`;
         if (overridesByStudentFee[overrideKey] !== undefined) {
@@ -171,12 +171,71 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
     }
   }
 
-  if (!results.length) {
+  // ---- Bad Debts computation for DEPARTED students ----
+  const badDebts = [];
+
+  for (const dep of departedStudents || []) {
+    const levelId = dep.classes?.level_id;
+    if (!levelId) continue;
+
+    let totalExpected = 0;
+
+    // Compute expected across all terms
+    for (const term of allTerms) {
+      const fees = feesByLevelTerm[`${levelId}|${term}`] || [];
+      if (!fees.length) continue;
+
+      let mandatoryExpected = 0;
+      fees.forEach(f => {
+        const schedules = schedulesByFee[f.id] || [];
+        let amount = schedules.reduce((sum, s) => sum + parseFloat(s.amount || 0), 0);
+        if (amount === 0) amount = parseFloat(f.amount);
+
+        const overrideKey = `${dep.id}|${f.id}`;
+        if (overridesByStudentFee[overrideKey] !== undefined) {
+          amount = parseFloat(overridesByStudentFee[overrideKey]);
+        }
+
+        const discountKey = `${dep.id}|${f.id}`;
+        const disc = discountsByStudentFee[discountKey];
+        if (disc) {
+          if (disc.discount_type === 'fixed') amount = Math.max(0, amount - parseFloat(disc.discount_value));
+          else amount *= (1 - parseFloat(disc.discount_value) / 100);
+        }
+        mandatoryExpected += amount;
+      });
+
+      const optionalKey = `${dep.id}|${term}`;
+      const optionalTotal = optionalByStudentTerm[optionalKey] || 0;
+      totalExpected += mandatoryExpected + optionalTotal;
+    }
+
+    // Total paid across all terms
+    let totalPaid = 0;
+    for (const term of allTerms) {
+      const paymentKey = `${dep.id}|${term}`;
+      totalPaid += paymentsByStudentTerm[paymentKey] || 0;
+    }
+
+    const outstanding = Math.max(0, totalExpected - totalPaid);
+
+    if (outstanding > 0) {
+      badDebts.push({
+        student_name: `${dep.first_name} ${dep.last_name}`,
+        class_name: dep.classes?.name || '—',
+        status: dep.status,
+        departure_date: dep.departure_date,
+        outstanding_amount: outstanding,
+      });
+    }
+  }
+
+  if (!results.length && !badDebts.length) {
     alert('No outstanding balances found for the selected filter.');
     return;
   }
 
-  // ---- Regrouper et générer le HTML ----
+  // ---- Grouping active results ----
   const grouped = {};
   results.forEach(row => {
     if (!grouped[row.term]) grouped[row.term] = {};
@@ -184,15 +243,10 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
     grouped[row.term][row.class_name].push(row);
   });
 
-  // (suite HTML identique à la version précédente)
   let percentLabel;
-  if (minPercent === 0) {
-    percentLabel = ' (Any balance > 0)';
-  } else if (minPercent === 100) {
-    percentLabel = ' (100% unpaid)';
-  } else {
-    percentLabel = ` (≥${minPercent}% remaining)`;
-  }
+  if (minPercent === 0) percentLabel = ' (Any balance > 0)';
+  else if (minPercent === 100) percentLabel = ' (100% unpaid)';
+  else percentLabel = ` (≥${minPercent}% remaining)`;
 
   let html = `<!DOCTYPE html>
 <html lang="en">
@@ -211,13 +265,16 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
   .recap { background-color: #f8fafc; font-weight: bold; }
   .term-recap { background-color: #dbeafe; font-weight: bold; }
   .grand-recap { background-color: #e0e7ff; font-weight: bold; }
+  .bad-debt-section { margin-top: 40px; padding: 20px; background: #fef2f2; border-left: 5px solid #dc2626; border-radius: 6px; }
+  .bad-debt-section h2 { color: #991b1b; margin-top: 0; }
+  .bad-debt-total { background: #fee2e2; font-weight: bold; color: #991b1b; }
   td, th { white-space: nowrap; }
   td:first-child, th:first-child { white-space: normal; }
 </style>
 </head>
 <body>
 <h1>Outstanding Balances – Academic Year ${academicYear}${percentLabel}</h1>
-<p>Only students with a strictly positive balance matching the selected threshold are listed.</p>
+<p>Only <strong>active students</strong> with a strictly positive balance matching the selected threshold are listed.</p>
 `;
 
   const termsOrder = ['Term 1', 'Term 2', 'Term 3'];
@@ -314,6 +371,46 @@ export async function generateOutstandingReport(minPercent = 0, academicYear = '
       <td class="outstanding"><strong>${fmt(grandTotalOutstanding)}</strong></td>
     </tr>
     </table>`;
+  }
+
+  // ═══════════ BAD DEBTS SECTION (computed dynamically) ═══════════
+  if (badDebts.length > 0) {
+    const totalBadDebt = badDebts.reduce((sum, b) => sum + b.outstanding_amount, 0);
+
+    html += `<div class="bad-debt-section">
+      <h2>🔴 Bad Debts — Departed Students</h2>
+      <p>These amounts represent outstanding balances from students who have left the school. They are <strong>excluded from active statistics</strong> and are shown here for accounting transparency.</p>
+      <table>
+        <tr>
+          <th>Departure Date</th>
+          <th>Student</th>
+          <th>Class</th>
+          <th>Reason</th>
+          <th>Amount (GHS)</th>
+        </tr>`;
+
+    const reasonLabels = {
+      transferred: 'Transferred',
+      dropped_out: 'Dropped Out',
+      graduated: 'Graduated',
+    };
+
+    badDebts.forEach(b => {
+      html += `<tr>
+        <td>${b.departure_date ? new Date(b.departure_date).toLocaleDateString('en-GB') : '—'}</td>
+        <td>${b.student_name}</td>
+        <td>${b.class_name}</td>
+        <td>${reasonLabels[b.status] || b.status}</td>
+        <td class="outstanding">${fmt(b.outstanding_amount)}</td>
+      </tr>`;
+    });
+
+    html += `<tr class="bad-debt-total">
+        <td colspan="4"><strong>TOTAL BAD DEBTS</strong></td>
+        <td class="outstanding"><strong>${fmt(totalBadDebt)}</strong></td>
+      </tr>
+      </table>
+    </div>`;
   }
 
   html += `</body></html>`;
