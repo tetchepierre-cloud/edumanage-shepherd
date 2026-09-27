@@ -6,7 +6,7 @@ import { computeTermReport } from '../lib/gradeCalculations';
 import { generateReportCard } from '../lib/reportCardGenerator';
 import { generateKgReportCard } from '../lib/kgReportCardGenerator';
 
-const ACADEMIC_YEAR = '2025/2026';
+const ACADEMIC_YEAR = '2026/2027';
 
 export default function ParentPortalPage() {
   // ── États d'authentification ──
@@ -36,6 +36,9 @@ export default function ParentPortalPage() {
   const [justifyReason, setJustifyReason] = useState('');
   const [justifyMessage, setJustifyMessage] = useState('');
   const [schoolConfig, setSchoolConfig] = useState({ name: 'School Name', address: '', phone: '', email: '', logo: null });
+
+  // 🆕 Nouveau state pour distinguer "aucun élève" vs "élève parti"
+  const [departedStudents, setDepartedStudents] = useState([]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -134,47 +137,74 @@ export default function ParentPortalPage() {
     }
   };
 
+  // ═══════════════════════════════════════════════════════
+  // 🆕 handleLoggedIn : 2 requêtes (actifs + tous)
+  // ═══════════════════════════════════════════════════════
   const handleLoggedIn = async (currentSession) => {
-  setIsDataLoading(true);
-  setSession(currentSession);
+    setIsDataLoading(true);
+    setSession(currentSession);
 
-  try {
-    const parentPhone = currentSession.user.user_metadata?.phone;
+    try {
+      const parentPhone = currentSession.user.user_metadata?.phone;
 
-    if (!parentPhone) {
-      console.warn("Parent phone not found in session metadata.");
+      if (!parentPhone) {
+        console.warn("Parent phone not found in session metadata.");
+        setIsDataLoading(false);
+        return;
+      }
+
+      // 1️⃣ Chercher les élèves ACTIFS
+      const { data: activeStudents, error: activeError } = await supabase
+        .from('students')
+        .select('id, first_name, last_name, class_id, parent_name, status, classes(name)')
+        .eq('parent_phone', parentPhone)
+        .eq('status', 'active');
+
+      if (activeError) {
+        console.error("Error fetching active students:", activeError);
+        setIsDataLoading(false);
+        return;
+      }
+
+      // 2️⃣ Cas normal : au moins un élève actif
+      if (activeStudents && activeStudents.length > 0) {
+        setAllStudents(activeStudents);
+        setDepartedStudents([]);
+        const first = activeStudents[0];
+        setStudent(first);
+        setSelectedStudentId(first.id);
+        setParentName(first.parent_name || 'Parent');
+        await loadStudentData(first.id);
+        await loadSharedData(first.id);
+        setIsDataLoading(false);
+        return;
+      }
+
+      // 3️⃣ Aucun élève actif : vérifier si l'élève existe mais est parti
+      const { data: allLinked, error: allError } = await supabase
+        .from('students')
+        .select('id, first_name, last_name, status, departure_date')
+        .eq('parent_phone', parentPhone);
+
+      if (allError) {
+        console.error("Error fetching all linked students:", allError);
+        setIsDataLoading(false);
+        return;
+      }
+
+      if (allLinked && allLinked.length > 0) {
+        // Au moins un élève lié mais aucun actif → il est parti
+        setDepartedStudents(allLinked);
+      } else {
+        // Vraiment aucun élève lié
+        setDepartedStudents([]);
+      }
+    } catch (err) {
+      console.error("Error loading parent portal data:", err);
+    } finally {
       setIsDataLoading(false);
-      return;
     }
-
-    const { data: linkedStudents, error: studentsError } = await supabase
-      .from('students')
-      .select('id, first_name, last_name, class_id, parent_name, classes(name)')
-      .eq('parent_phone', parentPhone);
-
-    if (studentsError) {
-      console.error("Error fetching linked students:", studentsError);
-      setIsDataLoading(false);
-      return;
-    }
-
-    if (linkedStudents && linkedStudents.length > 0) {
-      setAllStudents(linkedStudents);
-      const first = linkedStudents[0];
-      setStudent(first);
-      setSelectedStudentId(first.id);
-      setParentName(first.parent_name || 'Parent');
-      await loadStudentData(first.id);
-      await loadSharedData(first.id);
-    } else {
-      console.warn("No linked students found for phone:", parentPhone);
-    }
-  } catch (err) {
-    console.error("Error loading parent portal data:", err);
-  } finally {
-    setIsDataLoading(false);
-  }
-};
+  };
 
   const handleSelectStudent = async (id) => {
     const s = allStudents.find(x => x.id === id);
@@ -196,129 +226,121 @@ export default function ParentPortalPage() {
   };
 
   const fetchBalance = async (id) => {
-  const { data: st } = await supabase.from('students').select('class_id').eq('id', id).single();
-  if (!st?.class_id) return;
-  const { data: cl } = await supabase.from('classes').select('level_id').eq('id', st.class_id).single();
-  if (!cl?.level_id) return;
-  const { data: fees } = await supabase.from('fee_structure').select('id, amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('is_active', true);
-
-  // Récupération des réductions de l'élève
-  const { data: discounts } = await supabase
-    .from('student_fee_discounts')
-    .select('fee_structure_id, discount_type, discount_value')
-    .eq('student_id', id);
-
-  const discountMap = {};
-  (discounts || []).forEach(d => {
-    discountMap[d.fee_structure_id] = d;
-  });
-
-  // 🔁 Récupérer les overrides pour cet élève
-  const { data: overrides } = await supabase
-    .from('student_fee_overrides')
-    .select('fee_structure_id, override_amount')
-    .eq('student_id', id);
-  const overrideMap = {};
-  (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
-
-  let total = 0;
-  (fees || []).forEach(f => {
-    // Utiliser l'override si présent, sinon le montant standard
-    let amount = overrideMap[f.id] !== undefined
-      ? parseFloat(overrideMap[f.id])
-      : parseFloat(f.amount);
-    const disc = discountMap[f.id];
-    if (disc) {
-      if (disc.discount_type === 'fixed') {
-        amount = Math.max(0, amount - parseFloat(disc.discount_value));
-      } else {
-        amount = amount * (1 - parseFloat(disc.discount_value) / 100);
-      }
-    }
-    total += amount;
-  });
-
-  // --- AJOUT FRAIS OPTIONNELS (annuels) ---
-  const { data: optionalFees } = await supabase
-    .from('student_optional_fees')
-    .select('amount')
-    .eq('student_id', id)
-    .eq('academic_year', ACADEMIC_YEAR)
-    .eq('is_active', true);
-
-  const totalOptional = (optionalFees || []).reduce((sum, o) => sum + parseFloat(o.amount), 0);
-  total += totalOptional;
-
-  const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).in('status', ['paid','partial']);
-  const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
-  setBalance({ expected: total, paid, remaining: Math.max(0, total - paid) });
-};
-
-  const fetchTermBalances = async (id) => {
-  const terms = ['Term 1','Term 2','Term 3'];
-
-  // Récupération des réductions une seule fois pour l'élève
-  const { data: discounts } = await supabase
-    .from('student_fee_discounts')
-    .select('fee_structure_id, discount_type, discount_value')
-    .eq('student_id', id);
-
-  const discountMap = {};
-  (discounts || []).forEach(d => {
-    discountMap[d.fee_structure_id] = d;
-  });
-
-  // 🔁 Récupérer les overrides pour cet élève
-  const { data: overrides } = await supabase
-    .from('student_fee_overrides')
-    .select('fee_structure_id, override_amount')
-    .eq('student_id', id);
-  const overrideMap = {};
-  (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
-
-  const res = [];
-  for (const term of terms) {
-    let exp = 0;
     const { data: st } = await supabase.from('students').select('class_id').eq('id', id).single();
-    if (st?.class_id) {
-      const { data: cl } = await supabase.from('classes').select('level_id').eq('id', st.class_id).single();
-      if (cl?.level_id) {
-        const { data: fees } = await supabase.from('fee_structure').select('id, amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).eq('is_active', true);
-        (fees || []).forEach(f => {
-          // Utiliser l'override si présent, sinon le montant standard
-          let amount = overrideMap[f.id] !== undefined
-            ? parseFloat(overrideMap[f.id])
-            : parseFloat(f.amount);
-          const disc = discountMap[f.id];
-          if (disc) {
-            if (disc.discount_type === 'fixed') {
-              amount = Math.max(0, amount - parseFloat(disc.discount_value));
-            } else {
-              amount = amount * (1 - parseFloat(disc.discount_value) / 100);
-            }
-          }
-          exp += amount;
-        });
-      }
-    }
+    if (!st?.class_id) return;
+    const { data: cl } = await supabase.from('classes').select('level_id').eq('id', st.class_id).single();
+    if (!cl?.level_id) return;
+    const { data: fees } = await supabase.from('fee_structure').select('id, amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('is_active', true);
 
-    // --- AJOUT FRAIS OPTIONNELS (par terme) ---
-    const { data: optFees } = await supabase
+    const { data: discounts } = await supabase
+      .from('student_fee_discounts')
+      .select('fee_structure_id, discount_type, discount_value')
+      .eq('student_id', id);
+
+    const discountMap = {};
+    (discounts || []).forEach(d => {
+      discountMap[d.fee_structure_id] = d;
+    });
+
+    const { data: overrides } = await supabase
+      .from('student_fee_overrides')
+      .select('fee_structure_id, override_amount')
+      .eq('student_id', id);
+    const overrideMap = {};
+    (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
+
+    let total = 0;
+    (fees || []).forEach(f => {
+      let amount = overrideMap[f.id] !== undefined
+        ? parseFloat(overrideMap[f.id])
+        : parseFloat(f.amount);
+      const disc = discountMap[f.id];
+      if (disc) {
+        if (disc.discount_type === 'fixed') {
+          amount = Math.max(0, amount - parseFloat(disc.discount_value));
+        } else {
+          amount = amount * (1 - parseFloat(disc.discount_value) / 100);
+        }
+      }
+      total += amount;
+    });
+
+    const { data: optionalFees } = await supabase
       .from('student_optional_fees')
       .select('amount')
       .eq('student_id', id)
       .eq('academic_year', ACADEMIC_YEAR)
-      .eq('term', term)
       .eq('is_active', true);
-    const totalOptional = (optFees || []).reduce((sum, o) => sum + parseFloat(o.amount), 0);
-    exp += totalOptional;
 
-    const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).in('status', ['paid','partial']);
+    const totalOptional = (optionalFees || []).reduce((sum, o) => sum + parseFloat(o.amount), 0);
+    total += totalOptional;
+
+    const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).in('status', ['paid','partial']);
     const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
-    res.push({ term, expected: exp, paid, remaining: Math.max(0, exp - paid) });
-  }
-  setTermBalances(res);
-};
+    setBalance({ expected: total, paid, remaining: Math.max(0, total - paid) });
+  };
+
+  const fetchTermBalances = async (id) => {
+    const terms = ['Term 1','Term 2','Term 3'];
+
+    const { data: discounts } = await supabase
+      .from('student_fee_discounts')
+      .select('fee_structure_id, discount_type, discount_value')
+      .eq('student_id', id);
+
+    const discountMap = {};
+    (discounts || []).forEach(d => {
+      discountMap[d.fee_structure_id] = d;
+    });
+
+    const { data: overrides } = await supabase
+      .from('student_fee_overrides')
+      .select('fee_structure_id, override_amount')
+      .eq('student_id', id);
+    const overrideMap = {};
+    (overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount; });
+
+    const res = [];
+    for (const term of terms) {
+      let exp = 0;
+      const { data: st } = await supabase.from('students').select('class_id').eq('id', id).single();
+      if (st?.class_id) {
+        const { data: cl } = await supabase.from('classes').select('level_id').eq('id', st.class_id).single();
+        if (cl?.level_id) {
+          const { data: fees } = await supabase.from('fee_structure').select('id, amount').eq('level_id', cl.level_id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).eq('is_active', true);
+          (fees || []).forEach(f => {
+            let amount = overrideMap[f.id] !== undefined
+              ? parseFloat(overrideMap[f.id])
+              : parseFloat(f.amount);
+            const disc = discountMap[f.id];
+            if (disc) {
+              if (disc.discount_type === 'fixed') {
+                amount = Math.max(0, amount - parseFloat(disc.discount_value));
+              } else {
+                amount = amount * (1 - parseFloat(disc.discount_value) / 100);
+              }
+            }
+            exp += amount;
+          });
+        }
+      }
+
+      const { data: optFees } = await supabase
+        .from('student_optional_fees')
+        .select('amount')
+        .eq('student_id', id)
+        .eq('academic_year', ACADEMIC_YEAR)
+        .eq('term', term)
+        .eq('is_active', true);
+      const totalOptional = (optFees || []).reduce((sum, o) => sum + parseFloat(o.amount), 0);
+      exp += totalOptional;
+
+      const { data: pmts } = await supabase.from('fee_payments').select('amount').eq('student_id', id).eq('academic_year', ACADEMIC_YEAR).eq('term', term).in('status', ['paid','partial']);
+      const paid = (pmts || []).reduce((s, p) => s + parseFloat(p.amount), 0);
+      res.push({ term, expected: exp, paid, remaining: Math.max(0, exp - paid) });
+    }
+    setTermBalances(res);
+  };
 
   const fetchAttendance = async (id) => {
     const { data } = await supabase.from('attendance').select('status').eq('student_id', id);
@@ -369,23 +391,50 @@ export default function ParentPortalPage() {
     await supabase.auth.signOut();
     setSession(null); setStudent(null); setAllStudents([]); setSelectedStudentId(null); setParentName('Parent');
     setNotifications([]); setJustifications([]); setBalance({expected:0,paid:0,remaining:0}); setAttendance({present:0,absent:0,late:0}); setTerms([]);
+    setDepartedStudents([]);
   };
 
   // ── Vue connectée ──
   if (session) {
     if (isDataLoading) {
-        return <div className="min-h-screen flex items-center justify-center">Loading your portal...</div>;
+      return <div className="min-h-screen flex items-center justify-center">Loading your portal...</div>;
     }
-    
+
+    // 🆕 Cas : élève(s) lié(s) mais parti(s)
+    if (departedStudents.length > 0 && allStudents.length === 0) {
+      const studentNames = departedStudents.map(s => `${s.first_name} ${s.last_name}`).join(', ');
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center bg-gray-100">
+          <div className="bg-white rounded-2xl shadow-lg p-8 max-w-md">
+            <div className="text-5xl mb-4">👋</div>
+            <h2 className="text-xl font-bold text-gray-800 mb-2">Thank You</h2>
+            <p className="text-gray-600 mb-4">
+              Your child <strong>{studentNames}</strong> is no longer enrolled at this school.
+            </p>
+            <p className="text-sm text-gray-400 mb-6">
+              We wish you and your family all the best for the future.
+            </p>
+            <button
+              onClick={handleLogout}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium"
+            >
+              Sign Out
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Cas : aucun élève lié du tout
     if (!student || allStudents.length === 0) {
-        return (
-            <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
-                <h2 className="text-xl font-bold text-gray-800">No profile found</h2>
-                <p className="text-gray-600 mt-2">We couldn't find a student linked to this phone number.</p>
-                <p className="text-sm text-gray-400 mt-4">Please make sure your number is correctly registered in the school's database.</p>
-                <button onClick={handleLogout} className="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg">Sign Out</button>
-            </div>
-        );
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
+          <h2 className="text-xl font-bold text-gray-800">No profile found</h2>
+          <p className="text-gray-600 mt-2">We couldn't find a student linked to this phone number.</p>
+          <p className="text-sm text-gray-400 mt-4">Please make sure your number is correctly registered in the school's database.</p>
+          <button onClick={handleLogout} className="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg">Sign Out</button>
+        </div>
+      );
     }
 
     const fmt = n => `GHS ${parseFloat(n||0).toFixed(2)}`;
@@ -459,7 +508,7 @@ export default function ParentPortalPage() {
             )}
           </div>
 
-          {/* ═══════════ MODALE DE JUSTIFICATION (CORRIGÉE) ═══════════ */}
+          {/* ═══════════ MODALE DE JUSTIFICATION ═══════════ */}
           {showJustifyModal && (
             <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
@@ -505,8 +554,6 @@ export default function ParentPortalPage() {
               </div>
             </div>
           )}
-          {/* ═══════════ FIN DE LA MODALE ═══════════ */}
-
         </div>
       </div>
     );
