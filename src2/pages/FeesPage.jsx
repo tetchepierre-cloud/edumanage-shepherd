@@ -15,6 +15,7 @@ const PAYMENT_TYPES  = ['Tuition', 'Uniform', 'Books', 'Exam', 'Other']
 const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Bank Transfer', 'Cheque']
 const ACADEMIC_YEARS = ['2024/2025', '2025/2026', '2026/2027']
 const STATUSES       = ['paid', 'pending', 'partial']
+const PAGE_SIZE      = 25
 
 export default function FeesPage() {
   const [payments,     setPayments]     = useState([])
@@ -29,9 +30,12 @@ export default function FeesPage() {
   const [search,       setSearch]       = useState('')
   const [filterClass,  setFilterClass]  = useState('')
   const [filterStatus, setFilterStatus] = useState('')
-  const [filterYear,   setFilterYear]   = useState('')
+  const [filterYear,   setFilterYear]   = useState('2026/2027')
   const [filterTerm,   setFilterTerm]   = useState('')
   const [studentSearch, setStudentSearch] = useState('')
+
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount]   = useState(0)
 
   const [feeLines, setFeeLines] = useState([{ type: 'Tuition', amount: '', max: 0, locked: false, feeStructureId: null }])
   const [arrears, setArrears] = useState(0)
@@ -49,7 +53,7 @@ export default function FeesPage() {
     payment_method: 'Cash',
     receipt_number: '',
     status:         'paid',
-    academic_year:  '2025/2026',
+    academic_year:  '2026/2027',
     term:           'Term 1',
     payment_date:   new Date().toISOString().split('T')[0],
     notes:          '',
@@ -66,7 +70,7 @@ export default function FeesPage() {
   const [showReportModal, setShowReportModal] = useState(false)
   const [showOnlyActive, setShowOnlyActive] = useState(true)
   const [reportParams, setReportParams] = useState({
-    academicYear: '2025/2026',
+    academicYear: '2026/2027',
     periodType: '1',
     monthInput: '04/2026',
     customFrom: '',
@@ -79,7 +83,7 @@ export default function FeesPage() {
   const [statementSearch, setStatementSearch] = useState('')
   const [statementStudent, setStatementStudent] = useState(null)
   const [statementParams, setStatementParams] = useState({
-    academicYear: '2025/2026',
+    academicYear: '2026/2027',
     periodType: '1',
     term: '',
     customFrom: '',
@@ -87,21 +91,49 @@ export default function FeesPage() {
   })
 
   const [showDiscountReportModal, setShowDiscountReportModal] = useState(false)
-  const [discountReportYear, setDiscountReportYear] = useState('2025/2026')
+  const [discountReportYear, setDiscountReportYear] = useState('2026/2027')
   const [discountReportTerm, setDiscountReportTerm] = useState('')
   const [balanceReportTerm, setBalanceReportTerm] = useState('')
 
   const [showClassBalanceModal, setShowClassBalanceModal] = useState(false)
   const [selectedBalanceClass, setSelectedBalanceClass] = useState('')
-  const [selectedBalanceYear, setSelectedBalanceYear] = useState('2025/2026')
+  const [selectedBalanceYear, setSelectedBalanceYear] = useState('2026/2027')
   const [balanceReportMode, setBalanceReportMode] = useState('class')
-  
-  // États pour la modale OUTSTANDING
+
   const [showOutstandingModal, setShowOutstandingModal] = useState(false);
-  const [outstandingYear, setOutstandingYear] = useState('2025/2026');
+  const [outstandingYear, setOutstandingYear] = useState('2026/2027');
   const [outstandingFilterPercent, setOutstandingFilterPercent] = useState(0);
-  
-  useEffect(() => { fetchAll(); loadSchoolConfig() }, [])
+
+  useEffect(() => {
+    loadSchoolConfig()
+    loadDefaultYear()
+    fetchStudents()
+    fetchClasses()
+  }, [])
+
+  const loadDefaultYear = async () => {
+    const { data } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'academic_year')
+      .maybeSingle()
+    if (data?.value) {
+      setFilterYear(data.value)
+      setReportParams(prev => ({ ...prev, academicYear: data.value }))
+      setStatementParams(prev => ({ ...prev, academicYear: data.value }))
+      setDiscountReportYear(data.value)
+      setSelectedBalanceYear(data.value)
+      setOutstandingYear(data.value)
+    }
+  }
+
+  useEffect(() => {
+    fetchPayments(currentPage)
+  }, [currentPage, filterYear, filterTerm, filterStatus, filterClass, search])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [filterYear, filterTerm, filterStatus, filterClass, search])
 
   const loadSchoolConfig = async () => {
     const { data } = await supabase.from('app_settings').select('*')
@@ -116,12 +148,6 @@ export default function FeesPage() {
         logo:        config.logo        || prev.logo,
       }))
     }
-  }
-
-  const fetchAll = async () => {
-    setLoading(true)
-    await Promise.all([fetchStudents(), fetchClasses(), fetchPayments()])
-    setLoading(false)
   }
 
   const fetchStudents = async () => {
@@ -140,13 +166,35 @@ export default function FeesPage() {
     setClasses(data || [])
   }
 
-  const fetchPayments = async () => {
-    const { data, error } = await supabase
+  const fetchPayments = async (page = 1) => {
+    setLoading(true)
+    const from = (page - 1) * PAGE_SIZE
+    const to   = from + PAGE_SIZE - 1
+
+    let query = supabase
       .from('fee_payments')
-      .select('*, students(first_name, last_name, class_id, classes(name))')
+      .select('*, students!inner(first_name, last_name, class_id, classes(name))', { count: 'exact' })
+
+    if (filterYear)  query = query.eq('academic_year', filterYear)
+    if (filterTerm)  query = query.eq('term', filterTerm)
+    if (filterStatus) query = query.eq('status', filterStatus)
+    if (filterClass) query = query.eq('students.class_id', filterClass)
+
+    if (search.trim()) {
+      const s = search.trim()
+      query = query.or(
+        `students.first_name.ilike.%${s}%,students.last_name.ilike.%${s}%,receipt_number.ilike.%${s}%`
+      )
+    }
+
+    const { data, error, count } = await query
       .order('created_at', { ascending: false })
+      .range(from, to)
+
     if (error) console.error('fetchPayments error:', error)
     setPayments(data || [])
+    setTotalCount(count || 0)
+    setLoading(false)
   }
 
   const formatAmount = n =>
@@ -162,16 +210,13 @@ export default function FeesPage() {
       partial: 'bg-orange-100 text-orange-700',
     }
     return (
-      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full
-                        ${styles[status] || 'bg-gray-100 text-gray-600'}`}>
+      <span className={`inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded-full ${styles[status] || 'bg-gray-100 text-gray-600'}`}>
         {status ? status.charAt(0).toUpperCase() + status.slice(1) : '—'}
       </span>
     )
   }
 
-  // === FONCTIONS POUR LE TERME ===
   const getExpectedFeeItems = async (studentId, academicYear, term) => {
-    // 1. Récupérer la classe actuelle de l'élève (pour 2026/2027)
     const { data: student, error: studentErr } = await supabase
       .from('students')
       .select('class_id, classes(level_id, levels(name, sort_order))')
@@ -180,16 +225,11 @@ export default function FeesPage() {
     if (studentErr || !student?.classes?.levels) return []
 
     const currentLevelSortOrder = student.classes.levels.sort_order
-
-    // 2. Calculer l'écart d'années entre l'année demandée et l'année en cours (2026/2027)
-    const currentYearStart = parseInt('2026/2027'.split('/')[0]) // 2026
-    const requestedYearStart = parseInt(academicYear.split('/')[0]) // ex: 2025
-    const yearOffset = currentYearStart - requestedYearStart // 2026 - 2025 = 1
-
-    // 3. Niveau historique = sort_order actuel - écart (car promotion systématique)
+    const currentYearStart = parseInt('2026/2027'.split('/')[0])
+    const requestedYearStart = parseInt(academicYear.split('/')[0])
+    const yearOffset = currentYearStart - requestedYearStart
     const historicalSortOrder = currentLevelSortOrder - yearOffset
 
-    // 4. Récupérer l'ID du niveau historique
     const { data: historicalLevel, error: levelErr } = await supabase
       .from('levels')
       .select('id')
@@ -197,8 +237,6 @@ export default function FeesPage() {
       .single()
 
     if (levelErr || !historicalLevel) return []
-
-    // 5. Utiliser cet ID pour charger les frais de l'année demandée
     const levelId = historicalLevel.id
 
     let query = supabase
@@ -210,7 +248,7 @@ export default function FeesPage() {
     if (term) query = query.eq('term', term)
     const { data: fees, error: feesErr } = await query.order('is_mandatory', { ascending: false })
     if (feesErr || !fees || fees.length === 0) return []
-    
+
     const { data: discounts } = await supabase
       .from('student_fee_discounts')
       .select('fee_structure_id, discount_type, discount_value')
@@ -218,7 +256,6 @@ export default function FeesPage() {
     const discountMap = {}
     ;(discounts || []).forEach(d => { discountMap[d.fee_structure_id] = d })
 
-    // 🔁 Récupérer les overrides pour cet élève
     const { data: overrides } = await supabase
       .from('student_fee_overrides')
       .select('fee_structure_id, override_amount')
@@ -226,7 +263,6 @@ export default function FeesPage() {
     const overrideMap = {}
     ;(overrides || []).forEach(o => { overrideMap[o.fee_structure_id] = o.override_amount })
 
-    // --- AJOUT FRAIS OPTIONNELS ---
     const { data: optionalFees, error: optErr } = await supabase
       .from('student_optional_fees')
       .select('id, fee_name, amount')
@@ -237,31 +273,20 @@ export default function FeesPage() {
 
     if (optErr) console.warn('Erreur chargement frais optionnels:', optErr);
 
-    // Fusionner les frais obligatoires et optionnels
-    const allFees = fees.map(f => ({ 
-      id: f.id, 
-      fee_name: f.fee_name, 
-      fee_type: f.fee_type, 
-      amount: f.amount, 
-      is_mandatory: f.is_mandatory, 
-      required_for_admission: f.required_for_admission,
-      is_optional: false 
+    const allFees = fees.map(f => ({
+      id: f.id, fee_name: f.fee_name, fee_type: f.fee_type, amount: f.amount,
+      is_mandatory: f.is_mandatory, required_for_admission: f.required_for_admission,
+      is_optional: false
     }));
 
     (optionalFees || []).forEach(opt => {
       allFees.push({
-        id: opt.id,
-        fee_name: opt.fee_name,
-        fee_type: 'Optional',
-        amount: opt.amount,
-        is_mandatory: false,
-        required_for_admission: false,
-        is_optional: true,
+        id: opt.id, fee_name: opt.fee_name, fee_type: 'Optional', amount: opt.amount,
+        is_mandatory: false, required_for_admission: false, is_optional: true,
         optional_fee_id: opt.id,
       });
     });
 
-    // Appliquer discounts et overrides (uniquement pour les frais obligatoires)
     const finalItems = allFees.map(f => {
       let originalAmount = parseFloat(f.amount);
       let finalAmount = originalAmount;
@@ -322,9 +347,7 @@ export default function FeesPage() {
       return {
         type: f.type,
         label: f.description.split(' (')[0],
-        annual,
-        alreadyPaid,
-        remaining,
+        annual, alreadyPaid, remaining,
         feeStructureId: f.feeStructureId,
         requiredForAdmission: f.requiredForAdmission,
       }
@@ -420,7 +443,7 @@ export default function FeesPage() {
       payment_method: 'Cash',
       receipt_number: '',
       status:         'paid',
-      academic_year:  '2025/2026',
+      academic_year:  filterYear || '2026/2027',
       term:           'Term 1',
       payment_date:   new Date().toISOString().split('T')[0],
       notes:          '',
@@ -441,18 +464,14 @@ export default function FeesPage() {
       payment_method: payment.payment_method || 'Cash',
       receipt_number: payment.receipt_number || '',
       status:         payment.status         || 'paid',
-      academic_year:  payment.academic_year  || '2025/2026',
+      academic_year:  payment.academic_year  || '2026/2027',
       term:           payment.term           || 'Term 1',
       payment_date:   payment.payment_date   || new Date().toISOString().split('T')[0],
       notes:          payment.notes          || '',
     })
     if (payment.fee_items && payment.fee_items.length > 0) {
       setFeeLines(payment.fee_items.map(item => ({
-        type: item.type,
-        amount: item.amount.toString(),
-        max: 0,
-        locked: false,
-        feeStructureId: null,
+        type: item.type, amount: item.amount.toString(), max: 0, locked: false, feeStructureId: null,
       })))
     } else {
       setFeeLines([{ type: payment.payment_type, amount: payment.amount.toString(), max: 0, locked: false, feeStructureId: null }])
@@ -462,18 +481,14 @@ export default function FeesPage() {
   }
 
   const handlePrintReceipt = async (payment) => {
-    const expectedItems = await getExpectedFeeItems(payment.student_id, payment.academic_year || '2025/2026', payment.term || 'Term 1')
+    const expectedItems = await getExpectedFeeItems(payment.student_id, payment.academic_year || '2026/2027', payment.term || 'Term 1')
     let itemsToPrint = []
     const amountPaid = parseFloat(payment.amount || 0)
 
     if (payment.fee_items && Array.isArray(payment.fee_items) && payment.fee_items.length > 0) {
       itemsToPrint = payment.fee_items.map(fi => {
         const expected = expectedItems.find(e => e.type === fi.type)?.expected || parseFloat(fi.amount || 0)
-        return { 
-          description: fi.type, 
-          amount_due: expected, 
-          amount_paid: parseFloat(fi.amount || 0) 
-        }
+        return { description: fi.type, amount_due: expected, amount_paid: parseFloat(fi.amount || 0) }
       })
     } else if (expectedItems.length > 0) {
       let remaining = amountPaid
@@ -496,7 +511,7 @@ export default function FeesPage() {
   const handleOpenStatementModal = () => {
     setStatementSearch('')
     setStatementStudent(null)
-    setStatementParams({ academicYear: '2025/2026', periodType: '1', term: '', customFrom: '', customTo: '' })
+    setStatementParams({ academicYear: '2026/2027', periodType: '1', term: '', customFrom: '', customTo: '' })
     setShowStatementModal(true)
   }
 
@@ -507,27 +522,18 @@ export default function FeesPage() {
     setSaving(true)
     setMessage('')
 
-    if (!form.student_id) { 
-      setMessage('❌ Please select a student.')
-      setSaving(false)
-      return 
-    }
+    if (!form.student_id) { setMessage('❌ Please select a student.'); setSaving(false); return }
 
     const remainingFees = await getRemainingFeesForStudent(form.student_id, form.academic_year, form.term)
     const validLines = feeLines.filter(l => parseFloat(l.amount) > 0)
 
-    if (validLines.length === 0) { 
-      setMessage('❌ Add at least one fee item with amount > 0.')
-      setSaving(false)
-      return 
-    }
+    if (validLines.length === 0) { setMessage('❌ Add at least one fee item with amount > 0.'); setSaving(false); return }
 
     for (const line of validLines) {
       const remaining = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
       if (remaining && parseFloat(line.amount) > remaining.remaining) {
         setMessage(`❌ Amount for ${line.type} exceeds remaining balance (${formatAmount(remaining.remaining)}).`)
-        setSaving(false)
-        return
+        setSaving(false); return
       }
     }
 
@@ -541,22 +547,21 @@ export default function FeesPage() {
       collectorName = profile?.full_name || user.email || 'Accountant'
     }
 
-    // Déterminer le statut en fonction du solde restant après ce paiement
     const totalRemaining = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0)
     const remainingAfterPayment = totalRemaining - totalAmount
     const paymentStatus = remainingAfterPayment <= 0.01 ? 'paid' : 'partial'
 
     const payload = {
-      student_id: form.student_id, 
+      student_id: form.student_id,
       amount: totalAmount,
       payment_type: validLines.length > 1 ? 'Multiple' : validLines[0].type,
-      payment_method: form.payment_method, 
-      receipt_number: receiptNum, 
+      payment_method: form.payment_method,
+      receipt_number: receiptNum,
       status: paymentStatus,
-      academic_year: form.academic_year, 
-      term: form.term, 
+      academic_year: form.academic_year,
+      term: form.term,
       payment_date: form.payment_date,
-      notes: form.notes.trim() || null, 
+      notes: form.notes.trim() || null,
       fee_items: validLines.map(l => ({ type: l.type, amount: parseFloat(l.amount) })),
       collected_by_name: collectorName,
     }
@@ -571,7 +576,7 @@ export default function FeesPage() {
         await updateStudentActiveStatus(form.student_id, form.academic_year, form.term)
 
         setMessage('✅ Payment updated successfully!')
-        await fetchPayments()
+        await fetchPayments(currentPage)
         setTimeout(() => setShowForm(false), 1200)
       } else {
         const { data, error } = await supabase.from('fee_payments').insert([payload]).select().single()
@@ -586,7 +591,6 @@ export default function FeesPage() {
         const { data: fullPayment } = await supabase.from('fee_payments').select('*, students(first_name, last_name, class_id, parent_phone, classes(name))').eq('id', data.id).single()
 
         if (fullPayment) {
-          // ── ENVOI DU SMS (en premier, bloquant) ──
           const studentPhone = fullPayment.students?.parent_phone || student?.parent_phone
           if (studentPhone) {
             const totalRemainingBefore = remainingFees.reduce((sum, item) => sum + parseFloat(item.remaining || 0), 0)
@@ -603,7 +607,6 @@ export default function FeesPage() {
             )
           }
 
-          // ── IMPRESSION DU REÇU (après SMS) ──
           const feeItemsForReceipt = validLines.map(line => {
             const feeInfo = remainingFees.find(r => r.type.toLowerCase() === line.type.toLowerCase())
             return {
@@ -616,13 +619,14 @@ export default function FeesPage() {
         }
 
         setMessage('✅ Payment recorded & receipt printed!')
-        await fetchPayments()
+        await fetchPayments(1)
+        setCurrentPage(1)
         setTimeout(() => setShowForm(false), 1200)
       }
-    } catch (err) { 
-      setMessage(`❌ Error: ${err.message}`) 
-    } finally { 
-      setSaving(false) 
+    } catch (err) {
+      setMessage(`❌ Error: ${err.message}`)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -634,23 +638,17 @@ export default function FeesPage() {
     const { error } = await supabase.from('fee_payments').delete().eq('id', id)
     if (!error) {
       await logAction({ action: 'DELETE', tableName: 'fee_payments', recordId: id, oldData: paymentToDelete, newData: null, description: `Deleted fee payment — ${studentName} · ${paymentToDelete?.payment_type} GHS ${paymentToDelete?.amount} · Receipt: ${paymentToDelete?.receipt_number}` })
-      setPayments(prev => prev.filter(p => p.id !== id))
+      await fetchPayments(currentPage)
     } else { setMessage(`❌ Error: ${error.message}`) }
   }
 
-  const filtered = payments.filter(p => {
-    const fullName = `${p.students?.first_name} ${p.students?.last_name}`.toLowerCase()
-    const matchSearch = fullName.includes(search.toLowerCase()) || p.receipt_number?.toLowerCase().includes(search.toLowerCase())
-    const matchClass = filterClass ? p.students?.class_id === filterClass : true
-    const matchStatus = filterStatus ? p.status === filterStatus : true
-    const matchYear = filterYear ? p.academic_year === filterYear : true
-    const matchTerm = filterTerm ? p.term === filterTerm : true
-    return matchSearch && matchClass && matchStatus && matchYear && matchTerm
-  })
+  const totalCollected = payments.filter(p => p.status === 'paid').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
+  const totalPending = payments.filter(p => p.status === 'pending').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
+  const totalPartial = payments.filter(p => p.status === 'partial').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
 
-  const totalCollected = filtered.filter(p => p.status === 'paid').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
-  const totalPending = filtered.filter(p => p.status === 'pending').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
-  const totalPartial = filtered.filter(p => p.status === 'partial').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0)
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
+  const fromRecord = totalCount === 0 ? 0 : ((currentPage - 1) * PAGE_SIZE) + 1
+  const toRecord = Math.min(currentPage * PAGE_SIZE, totalCount)
 
   useEffect(() => {
     if (form.student_id && form.academic_year && form.term) {
@@ -666,24 +664,16 @@ export default function FeesPage() {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div><h2 className="text-2xl font-bold text-gray-900">Fee Payments</h2><p className="text-gray-500 text-sm">{payments.length} payment records</p></div>
-        <div className="flex items-center gap-2">
-          <CanAct module="fees" section="header" element="Record Payment button"><button onClick={openAddForm} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2">➕ Record Payment</button></CanAct>
-          <CanAct module="fees" section="header" element="Fees Report button"><button onClick={handleGenerateReport} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Fees Collection Report">📊 Fees Report</button></CanAct>
-          <CanAct module="fees" section="header" element="Student Statement button"><button onClick={handleOpenStatementModal} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Student Statement">📄 Statement</button></CanAct>
-          <CanAct module="fees" section="header" element="Discounts button"><button onClick={handleOpenDiscountReport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Discount Report">🏷️ Discounts</button></CanAct>
-          <CanAct module="fees" section="header" element="Class Balance button"><button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2" title="Class Balance Report">📊 Class Balance</button></CanAct>
-          
+        <div><h2 className="text-2xl font-bold text-gray-900">Fee Payments</h2><p className="text-gray-500 text-sm">{totalCount} payment records</p></div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <CanAct module="fees" section="header" element="Record Payment button"><button onClick={openAddForm} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1">➕ Record Payment</button></CanAct>
+          <CanAct module="fees" section="header" element="Fees Report button"><button onClick={handleGenerateReport} className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1" title="Fees Collection Report">📊 Fees Report</button></CanAct>
+          <CanAct module="fees" section="header" element="Student Statement button"><button onClick={handleOpenStatementModal} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1" title="Student Statement">📄 Statement</button></CanAct>
+          <CanAct module="fees" section="header" element="Discounts button"><button onClick={handleOpenDiscountReport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1" title="Discount Report">🏷️ Discounts</button></CanAct>
+          <CanAct module="fees" section="header" element="Class Balance button"><button onClick={() => setShowClassBalanceModal(true)} className="bg-teal-600 hover:bg-teal-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1" title="Class Balance Report">📊 Class Balance</button></CanAct>
           <CanAct module="fees" section="header" element="Outstanding Balances button">
-            <button
-              onClick={() => setShowOutstandingModal(true)}
-              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
-              title="Outstanding Balances Report"
-            >
-              📋 Outstanding
-            </button>
+            <button onClick={() => setShowOutstandingModal(true)} className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1" title="Outstanding Balances Report">📋 Outstanding</button>
           </CanAct>
-
         </div>
       </div>
 
@@ -691,9 +681,9 @@ export default function FeesPage() {
 
       <CanSee module="fees" section="summary" element="Status cards">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-green-500"><p className="text-sm text-gray-500 font-medium">Fully Paid</p><p className="text-2xl font-bold text-green-600 mt-1">{formatAmount(totalCollected)}</p></div>
-          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-yellow-500"><p className="text-sm text-gray-500 font-medium">Pending</p><p className="text-2xl font-bold text-yellow-600 mt-1">{formatAmount(totalPending)}</p></div>
-          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-orange-500"><p className="text-sm text-gray-500 font-medium">Partial</p><p className="text-2xl font-bold text-orange-600 mt-1">{formatAmount(totalPartial)}</p></div>
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-green-500"><p className="text-sm text-gray-500 font-medium">Fully Paid <span className="text-xs text-gray-400">(page)</span></p><p className="text-2xl font-bold text-green-600 mt-1">{formatAmount(totalCollected)}</p></div>
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-yellow-500"><p className="text-sm text-gray-500 font-medium">Pending <span className="text-xs text-gray-400">(page)</span></p><p className="text-2xl font-bold text-yellow-600 mt-1">{formatAmount(totalPending)}</p></div>
+          <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-orange-500"><p className="text-sm text-gray-500 font-medium">Partial <span className="text-xs text-gray-400">(page)</span></p><p className="text-2xl font-bold text-orange-600 mt-1">{formatAmount(totalPartial)}</p></div>
         </div>
       </CanSee>
 
@@ -703,15 +693,85 @@ export default function FeesPage() {
         <CanSee module="fees" section="filters" element="Status select"><select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}</select></CanSee>
         <CanSee module="fees" section="filters" element="Year select"><select value={filterYear} onChange={e => setFilterYear(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Years</option>{ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></CanSee>
         <CanSee module="fees" section="filters" element="Term select"><select value={filterTerm} onChange={e => setFilterTerm(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="">All Terms</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option></select></CanSee>
-        <button onClick={() => { setSearch(''); setFilterClass(''); setFilterStatus(''); setFilterYear(''); setFilterTerm(''); }} className="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Clear</button>
+        <button onClick={() => { setSearch(''); setFilterClass(''); setFilterStatus(''); setFilterYear('2026/2027'); setFilterTerm(''); }} className="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Clear</button>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm overflow-auto max-h-[65vh]">
+      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
         <CanSee module="fees" section="table" element="Payment rows">
-          {loading ? (<div className="text-center py-12"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3" /><p className="text-gray-500">Loading payments...</p></div>) : filtered.length === 0 ? (<div className="text-center py-12"><p className="text-4xl mb-2">💳</p><p className="text-gray-500">No payment records found</p></div>) : (
-            <div className="overflow-x-auto"><table className="w-full"><thead className="bg-gray-50 border-b"><tr className="text-left text-xs font-medium text-gray-500 uppercase tracking-wide"><th className="px-6 py-4">#</th><th className="px-6 py-4">Receipt</th><th className="px-6 py-4">Student</th><th className="px-6 py-4">Class</th><th className="px-6 py-4">Type</th><th className="px-6 py-4">Method</th><th className="px-6 py-4">Amount</th><th className="px-6 py-4">Status</th><th className="px-6 py-4">Date</th><th className="px-6 py-4">Actions</th></tr></thead><tbody className="divide-y divide-gray-100">{filtered.map((payment, index) => (<tr key={payment.id} className="hover:bg-gray-50 transition-colors"><td className="px-6 py-4 text-gray-400 text-sm">{index + 1}</td><td className="px-6 py-4 text-xs font-mono text-gray-600">{payment.receipt_number}</td><td className="px-6 py-4 font-medium text-gray-900">{payment.students?.first_name} {payment.students?.last_name}</td><td className="px-6 py-4 text-gray-600">{payment.students?.classes?.name || '—'}</td><td className="px-6 py-4 text-gray-600">{payment.payment_type === 'Multiple' && payment.fee_items?.length ? payment.fee_items.map((fi, idx) => (<div key={idx}>{fi.type}</div>)) : payment.payment_type}</td><td className="px-6 py-4 text-gray-600">{payment.payment_method}</td><td className="px-6 py-4 font-semibold text-gray-900">{formatAmount(payment.amount)}</td><td className="px-6 py-4">{statusBadge(payment.status)}</td><td className="px-6 py-4 text-gray-500 text-sm">{payment.payment_date ? formatDate(payment.payment_date) : formatDate(payment.created_at)}</td><td className="px-6 py-4"><div className="flex gap-2"><CanAct module="fees" section="table" element="Edit button"><button onClick={() => openEditForm(payment)} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-2 py-1 rounded hover:bg-blue-50">✏️ Edit</button></CanAct><CanAct module="fees" section="table" element="Print button"><button onClick={() => handlePrintReceipt(payment)} className="text-green-600 hover:text-green-800 text-sm font-medium px-2 py-1 rounded hover:bg-green-50">🖨️ Print</button></CanAct><CanAct module="fees" section="table" element="Delete button"><button onClick={() => handleDelete(payment.id)} className="text-red-500 hover:text-red-700 text-sm font-medium px-2 py-1 rounded hover:bg-red-50">🗑️ Del</button></CanAct></div></td></tr>))}</tbody></table></div>
+          {loading ? (<div className="text-center py-12"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3" /><p className="text-gray-500">Loading payments...</p></div>) : payments.length === 0 ? (<div className="text-center py-12"><p className="text-4xl mb-2">💳</p><p className="text-gray-500">No payment records found</p></div>) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs table-fixed">
+                <thead className="bg-gray-50 border-b">
+                  <tr className="text-left text-[10px] font-medium text-gray-500 uppercase tracking-wide">
+                    <th className="px-1.5 py-2.5 w-[3%]">#</th>
+                    <th className="px-1.5 py-2.5 w-[11%]">Receipt</th>
+                    <th className="px-1.5 py-2.5 w-[16%]">Student</th>
+                    <th className="px-1.5 py-2.5 w-[9%]">Class</th>
+                    <th className="px-1.5 py-2.5 w-[13%]">Type</th>
+                    <th className="px-1.5 py-2.5 w-[9%]">Method</th>
+                    <th className="px-1.5 py-2.5 w-[10%] text-right">Amount</th>
+                    <th className="px-1.5 py-2.5 w-[8%] text-center">Status</th>
+                    <th className="px-1.5 py-2.5 w-[10%]">Date</th>
+                    <th className="px-1.5 py-2.5 w-[11%] text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {payments.map((payment, index) => (
+                    <tr key={payment.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-1.5 py-2.5 text-gray-400">{fromRecord + index}</td>
+                      <td className="px-1.5 py-2.5 font-mono text-gray-600 truncate" title={payment.receipt_number}>{payment.receipt_number}</td>
+                      <td className="px-1.5 py-2.5 font-medium text-gray-900 truncate" title={`${payment.students?.first_name} ${payment.students?.last_name}`}>{payment.students?.first_name} {payment.students?.last_name}</td>
+                      <td className="px-1.5 py-2.5 text-gray-600 truncate" title={payment.students?.classes?.name || '—'}>{payment.students?.classes?.name || '—'}</td>
+                      <td className="px-1.5 py-2.5 text-gray-600 truncate" title={payment.payment_type === 'Multiple' && payment.fee_items?.length ? payment.fee_items.map(fi => fi.type).join(', ') : payment.payment_type}>
+                        {payment.payment_type === 'Multiple' && payment.fee_items?.length
+                          ? payment.fee_items.map((fi, idx) => (<div key={idx} className="truncate">{fi.type}</div>))
+                          : payment.payment_type}
+                      </td>
+                      <td className="px-1.5 py-2.5 text-gray-600 truncate">{payment.payment_method}</td>
+                      <td className="px-1.5 py-2.5 font-semibold text-gray-900 text-right whitespace-nowrap">{formatAmount(payment.amount)}</td>
+                      <td className="px-1.5 py-2.5 text-center">{statusBadge(payment.status)}</td>
+                      <td className="px-1.5 py-2.5 text-gray-500 whitespace-nowrap">{payment.payment_date ? formatDate(payment.payment_date) : formatDate(payment.created_at)}</td>
+                      <td className="px-1.5 py-2.5">
+                        <div className="flex gap-1 justify-center">
+                          <CanAct module="fees" section="table" element="Edit button"><button onClick={() => openEditForm(payment)} className="text-blue-600 hover:text-blue-800 text-sm" title="Edit">✏️</button></CanAct>
+                          <CanAct module="fees" section="table" element="Print button"><button onClick={() => handlePrintReceipt(payment)} className="text-green-600 hover:text-green-800 text-sm" title="Print">🖨️</button></CanAct>
+                          <CanAct module="fees" section="table" element="Delete button"><button onClick={() => handleDelete(payment.id)} className="text-red-500 hover:text-red-700 text-sm" title="Delete">🗑️</button></CanAct>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </CanSee>
+
+        {!loading && totalCount > 0 && (
+          <div className="px-6 py-3 border-t bg-gray-50 flex flex-wrap justify-between items-center gap-3">
+            <span className="text-sm text-gray-600">
+              Showing <strong>{fromRecord}</strong>–<strong>{toRecord}</strong> of <strong>{totalCount}</strong> records
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                ← Previous
+              </button>
+              <span className="px-3 py-1.5 text-sm font-medium text-gray-700">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {showForm && (
@@ -731,94 +791,70 @@ export default function FeesPage() {
       )}
 
       {showClassBalanceModal && (
-  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-      <div className="p-6 border-b flex items-center justify-between">
-        <h3 className="text-lg font-bold text-gray-900">📊 Balance Report</h3>
-        <button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
-      </div>
-      <div className="p-6 space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Report Scope</label>
-          <select
-            value={balanceReportMode}
-            onChange={e => setBalanceReportMode(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-          >
-            <option value="class">📚 Specific Class (Student Detail)</option>
-            <option value="school">🏫 Whole School (Summary by Class)</option>
-          </select>
-        </div>
-
-        {balanceReportMode === 'class' && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Class</label>
-            <select
-              value={selectedBalanceClass}
-              onChange={e => setSelectedBalanceClass(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-            >
-              <option value="">-- Select Class --</option>
-              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6 border-b flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-900">📊 Balance Report</h3>
+              <button onClick={() => setShowClassBalanceModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Report Scope</label>
+                <select value={balanceReportMode} onChange={e => setBalanceReportMode(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="class">📚 Specific Class (Student Detail)</option>
+                  <option value="school">🏫 Whole School (Summary by Class)</option>
+                </select>
+              </div>
+              {balanceReportMode === 'class' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Class</label>
+                  <select value={selectedBalanceClass} onChange={e => setSelectedBalanceClass(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                    <option value="">-- Select Class --</option>
+                    {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+                <select value={selectedBalanceYear} onChange={e => setSelectedBalanceYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
+                <select value={balanceReportTerm} onChange={e => setBalanceReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="">All Terms</option>
+                  <option value="Term 1">Term 1</option>
+                  <option value="Term 2">Term 2</option>
+                  <option value="Term 3">Term 3</option>
+                </select>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setShowClassBalanceModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
+                <button
+                  onClick={async () => {
+                    if (balanceReportMode === 'class' && !selectedBalanceClass) { alert('Please select a class.'); return; }
+                    setShowClassBalanceModal(false);
+                    const className = balanceReportMode === 'class' ? classes.find(c => c.id === selectedBalanceClass)?.name : null;
+                    await generateClassBalanceReport({
+                      mode: balanceReportMode,
+                      className,
+                      classId: balanceReportMode === 'class' ? selectedBalanceClass : null,
+                      academicYear: selectedBalanceYear,
+                      schoolConfig,
+                      term: balanceReportTerm || null,
+                    });
+                  }}
+                  className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 text-sm"
+                >
+                  Generate Report
+                </button>
+              </div>
+            </div>
           </div>
-        )}
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-          <select value={selectedBalanceYear} onChange={e => setSelectedBalanceYear(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-            {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
         </div>
+      )}
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Term (optional)</label>
-          <select value={balanceReportTerm} onChange={e => setBalanceReportTerm(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-            <option value="">All Terms</option>
-            <option value="Term 1">Term 1</option>
-            <option value="Term 2">Term 2</option>
-            <option value="Term 3">Term 3</option>
-          </select>
-        </div>
-
-        <div className="flex gap-3 pt-2">
-          <button
-            type="button"
-            onClick={() => setShowClassBalanceModal(false)}
-            className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={async () => {
-              if (balanceReportMode === 'class' && !selectedBalanceClass) {
-                alert('Please select a class.');
-                return;
-              }
-              setShowClassBalanceModal(false);
-              const className = balanceReportMode === 'class'
-                ? classes.find(c => c.id === selectedBalanceClass)?.name
-                : null;
-              await generateClassBalanceReport({
-                mode: balanceReportMode,
-                className,
-                classId: balanceReportMode === 'class' ? selectedBalanceClass : null,
-                academicYear: selectedBalanceYear,
-                schoolConfig,
-                term: balanceReportTerm || null,
-              });
-            }}
-            className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 text-sm"
-          >
-            Generate Report
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-)}
-
-      {/* ── Modal Outstanding ── */}
       {showOutstandingModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto">
@@ -829,21 +865,13 @@ export default function FeesPage() {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                <select
-                  value={outstandingYear}
-                  onChange={e => setOutstandingYear(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                >
+                <select value={outstandingYear} onChange={e => setOutstandingYear(e.target.value)} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
                   {ACADEMIC_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Minimum Outstanding</label>
-                <select
-                  value={outstandingFilterPercent}
-                  onChange={e => setOutstandingFilterPercent(Number(e.target.value))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                >
+                <select value={outstandingFilterPercent} onChange={e => setOutstandingFilterPercent(Number(e.target.value))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
                   <option value={0}>Any balance</option>
                   <option value={25}>≥ 25%</option>
                   <option value={50}>≥ 50%</option>
@@ -852,23 +880,8 @@ export default function FeesPage() {
                 </select>
               </div>
               <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowOutstandingModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowOutstandingModal(false);
-                    generateOutstandingReport(outstandingFilterPercent, outstandingYear);
-                  }}
-                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium text-sm"
-                >
-                  Generate
-                </button>
+                <button type="button" onClick={() => setShowOutstandingModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium text-sm">Cancel</button>
+                <button type="button" onClick={() => { setShowOutstandingModal(false); generateOutstandingReport(outstandingFilterPercent, outstandingYear); }} className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium text-sm">Generate</button>
               </div>
             </div>
           </div>

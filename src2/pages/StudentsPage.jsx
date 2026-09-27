@@ -5,6 +5,7 @@ import { logAction } from '../lib/audit'
 import { CanAct, CanSee } from '../components/PermissionGate'
 
 const FEE_TYPES = ['tuition', 'exam', 'canteen', 'transport', 'uniform', 'other'];
+const PAGE_SIZE = 50
 
 const STUDENT_STATUSES = [
   { value: 'active',      label: 'Active' },
@@ -29,7 +30,11 @@ export default function StudentsPage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
-  // Confirmation modal when status changes from active to something else
+  // ─── Pagination ───
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+
+  // ─── Modale de confirmation de départ ───
   const [showConfirmDeparture, setShowConfirmDeparture] = useState(false)
   const [pendingPayload, setPendingPayload] = useState(null)
   const [pendingDepartureInfo, setPendingDepartureInfo] = useState({ outstanding: 0, reason: 'transferred' })
@@ -41,30 +46,55 @@ export default function StudentsPage() {
 
   useEffect(() => {
     fetchClasses()
-    fetchStudents()
   }, [])
+
+  // ─── Recharger quand la page ou les filtres changent ───
+  useEffect(() => {
+    fetchStudents(currentPage)
+  }, [currentPage, filterClass])
+
+  // ─── Reset page à 1 quand on change de filtre ───
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [filterClass])
 
   const fetchClasses = async () => {
     const { data } = await supabase.from('classes').select('id, name').order('sort_order')
     setClasses(data || [])
   }
 
-  const fetchStudents = async () => {
+  // ═══════════════════════════════════════════════════════
+  // PAGINATION SERVEUR
+  // ═══════════════════════════════════════════════════════
+  const fetchStudents = async (page = 1) => {
     setLoading(true);
+    const from = (page - 1) * PAGE_SIZE
+    const to   = from + PAGE_SIZE - 1
+
     const { data: { user } } = await supabase.auth.getUser();
     const { data: assignments } = await supabase
       .from('teacher_classes')
       .select('class_id')
       .eq('teacher_id', user.id);
 
-    let query = supabase.from('students').select('*, classes(name)');
+    let query = supabase
+      .from('students')
+      .select('*, classes(name)', { count: 'exact' });
+
     if (assignments && assignments.length > 0) {
       const classIds = assignments.map(a => a.class_id);
       query = query.in('class_id', classIds);
     }
-    const { data, error } = await query.order('first_name');
+
+    if (filterClass) query = query.eq('class_id', filterClass);
+
+    const { data, error, count } = await query
+      .order('first_name')
+      .range(from, to);
+
     if (error) console.error("Error fetching students:", error);
     setStudents(data || []);
+    setTotalCount(count || 0);
     setLoading(false);
   }
 
@@ -196,7 +226,6 @@ export default function StudentsPage() {
     setShowForm(true)
   }
 
-  // ─── Calcul du solde restant pour un élève (tous les termes) ───
   const calculateOutstanding = async (student) => {
     const { data: settings } = await supabase
       .from('app_settings')
@@ -251,7 +280,6 @@ export default function StudentsPage() {
     return Math.max(0, totalExpected - totalPaid);
   }
 
-  // ─── Étape 1 : préparation du save (validation) ───
   const handleSave = async (e) => {
     e.preventDefault()
     setSaving(true)
@@ -292,7 +320,6 @@ export default function StudentsPage() {
       min_payment_override: form.min_payment_override ? parseFloat(form.min_payment_override) : null,
     }
 
-    // Si le statut passe de "active" à un statut de départ → demander confirmation
     if (editStudent && wasActive && isBecomingInactive && statusChanged) {
       setSaving(false)
       setPendingPayload(payload)
@@ -310,11 +337,9 @@ export default function StudentsPage() {
       return
     }
 
-    // Sinon, save directement
     await executeSave(payload, false, 0)
   }
 
-  // ─── Étape 2 : exécution effective du save ───
   const executeSave = async (payload, createWriteOff = false, outstanding = 0) => {
     setSaving(true)
     setMessage('')
@@ -325,7 +350,6 @@ export default function StudentsPage() {
         const { data, error } = await supabase.from('students').update(payload).eq('id', editStudent.id).select().single()
         if (error) throw error
 
-        // Créer une écriture de créance irrécouvrable si nécessaire
         if (createWriteOff && outstanding > 0) {
           const { data: settings } = await supabase
             .from('app_settings')
@@ -344,7 +368,6 @@ export default function StudentsPage() {
           });
         }
 
-        // Mettre à jour departure_date et outstanding_at_departure si statut ≠ active
         if (payload.status !== 'active') {
           await supabase.from('students').update({
             departure_date: new Date().toISOString().split('T')[0],
@@ -352,13 +375,13 @@ export default function StudentsPage() {
           }).eq('id', data.id);
         }
 
-        await logAction({ 
-          action: 'UPDATE', 
-          tableName: 'students', 
-          recordId: data.id, 
-          oldData: oldStudent, 
-          newData: data, 
-          description: `Updated student ${data.first_name} ${data.last_name}${createWriteOff ? ` — Departure (${payload.status}) · Balance: GHS ${outstanding.toFixed(2)}` : ''}` 
+        await logAction({
+          action: 'UPDATE',
+          tableName: 'students',
+          recordId: data.id,
+          oldData: oldStudent,
+          newData: data,
+          description: `Updated student ${data.first_name} ${data.last_name}${createWriteOff ? ` — Departure (${payload.status}) · Balance: GHS ${outstanding.toFixed(2)}` : ''}`
         })
         setMessage('✅ Student updated successfully!')
       } else {
@@ -367,7 +390,7 @@ export default function StudentsPage() {
         await logAction({ action: 'CREATE', tableName: 'students', recordId: data.id, oldData: null, newData: data, description: `Added student ${data.first_name} ${data.last_name}` })
         setMessage('✅ Student added successfully!')
       }
-      await fetchStudents()
+      await fetchStudents(currentPage)
       setTimeout(() => setShowForm(false), 1200)
     } catch (error) {
       setMessage(`❌ Error: ${error.message}`)
@@ -376,7 +399,6 @@ export default function StudentsPage() {
     }
   }
 
-  // ─── Confirmation de la déclaration de départ ───
   const confirmDepartureAndSave = async () => {
     if (!pendingPayload) return
     await executeSave(pendingPayload, true, pendingDepartureInfo.outstanding)
@@ -390,26 +412,28 @@ export default function StudentsPage() {
     const { error } = await supabase.from('students').delete().eq('id', id)
     if (!error) {
       await logAction({ action: 'DELETE', tableName: 'students', recordId: id, oldData: studentToDelete, newData: null, description: `Deleted student ${studentToDelete.first_name} ${studentToDelete.last_name}` })
-      setStudents(prev => prev.filter(s => s.id !== id))
-      setMessage('✅ Student deleted.')
+      await fetchStudents(currentPage)
     } else {
       setMessage(`❌ Error: ${error.message}`)
     }
   }
 
+  // ── Recherche côté client (uniquement sur la page courante) ──
   const filtered = students.filter(s => {
     const fullName = `${s.first_name} ${s.last_name}`.toLowerCase()
-    const matchSearch = fullName.includes(search.toLowerCase()) || s.parent_name?.toLowerCase().includes(search.toLowerCase()) || s.parent_phone?.includes(search)
-    const matchClass = filterClass ? s.class_id === filterClass : true
-    return matchSearch && matchClass
+    return fullName.includes(search.toLowerCase()) || s.parent_name?.toLowerCase().includes(search.toLowerCase()) || s.parent_phone?.includes(search)
   })
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
+  const fromRecord = totalCount === 0 ? 0 : ((currentPage - 1) * PAGE_SIZE) + 1
+  const toRecord = Math.min(currentPage * PAGE_SIZE, totalCount)
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Students</h2>
-          <p className="text-gray-500 text-sm">{students.length} students enrolled</p>
+          <p className="text-gray-500 text-sm">{totalCount} students enrolled</p>
         </div>
         <CanAct module="students" section="header" element="Add Student button">
           <button onClick={openAddForm} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2">➕ Add Student</button>
@@ -449,7 +473,7 @@ export default function StudentsPage() {
               <tbody className="divide-y divide-gray-100">
                 {filtered.map((student, index) => (
                   <tr key={student.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4 text-gray-400 text-sm">{index + 1}</td>
+                    <td className="px-6 py-4 text-gray-400 text-sm">{fromRecord + index}</td>
                     <td className="px-6 py-4 font-medium text-gray-900">{student.first_name} {student.last_name}</td>
                     <td className="px-6 py-4 text-gray-600">{student.classes?.name || '—'}</td>
                     <td className="px-6 py-4 text-gray-600">{student.gender || '—'}</td>
@@ -461,8 +485,6 @@ export default function StudentsPage() {
                           ? 'bg-green-100 text-green-700'
                           : student.status === 'transferred'
                           ? 'bg-orange-100 text-orange-700'
-                          : student.status === 'graduated'
-                          ? 'bg-blue-100 text-blue-700'
                           : 'bg-gray-100 text-gray-700'
                       }`}>
                         {student.status === 'transferred' ? 'Transferred'
@@ -487,9 +509,36 @@ export default function StudentsPage() {
             </table>
           </div>
         )}
+
+        {/* ── Pagination ── */}
+        {!loading && totalCount > 0 && (
+          <div className="px-6 py-3 border-t bg-gray-50 flex flex-wrap justify-between items-center gap-3">
+            <span className="text-sm text-gray-600">
+              Showing <strong>{fromRecord}</strong>–<strong>{toRecord}</strong> of <strong>{totalCount}</strong> students
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                ← Previous
+              </button>
+              <span className="px-3 py-1.5 text-sm font-medium text-gray-700">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ═══════════ STUDENT FORM MODAL ═══════════ */}
       {showForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -623,7 +672,6 @@ export default function StudentsPage() {
         </div>
       )}
 
-      {/* ═══════════ DEPARTURE CONFIRMATION MODAL ═══════════ */}
       {showConfirmDeparture && editStudent && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
