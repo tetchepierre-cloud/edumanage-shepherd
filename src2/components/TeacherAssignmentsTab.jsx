@@ -28,7 +28,7 @@ export default function TeacherAssignmentsTab() {
       .from('teacher_classes')
       .select('*');
 
-    // ── TRI SÉCURISÉ (Immutabilité) : par sort_order du niveau, puis par nom ──
+    // ── TRI SÉCURISÉ : par sort_order du niveau, puis par nom ──
     const sortedClasses = [...(cData || [])].sort((a, b) => {
       const orderA = a.levels?.sort_order ?? 999;
       const orderB = b.levels?.sort_order ?? 999;
@@ -42,7 +42,7 @@ export default function TeacherAssignmentsTab() {
     setLoading(false);
   }
 
-  // ── Regroupement par niveau garanti par un Array (au lieu d'un Objet JS) ──
+  // ── Regroupement par niveau ──
   const groupedClassesArray = useMemo(() => {
     const groupsMap = {};
 
@@ -58,31 +58,54 @@ export default function TeacherAssignmentsTab() {
       groupsMap[levelName].classes.push(cls);
     });
 
-    // On retourne un tableau d'objets, trié de manière stricte
     return Object.values(groupsMap).sort((a, b) => a.sortOrder - b.sortOrder);
   }, [classes]);
 
-  // Extraction aplatie pour les colonnes et cases à cocher, synchronisée avec l'en-tête
   const flattenedClasses = useMemo(() => {
     return groupedClassesArray.flatMap(group => group.classes);
   }, [groupedClassesArray]);
 
+  const shouldShowGroupRow = useMemo(() => {
+    return groupedClassesArray.some(g => g.classes.length > 1);
+  }, [groupedClassesArray]);
+
+  // ═══════════════════════════════════════════════════════
+  // toggleAssignment avec gestion d'erreurs
+  // ═══════════════════════════════════════════════════════
   async function toggleAssignment(teacherId, classId) {
     const exists = assignments.find(
       a => a.teacher_id === teacherId && a.class_id === classId.toString()
     );
 
     if (exists) {
-      await supabase.from('teacher_classes').delete().eq('id', exists.id);
+      const { error } = await supabase
+        .from('teacher_classes')
+        .delete()
+        .eq('id', exists.id);
+
+      if (error) {
+        console.error('Delete error:', error);
+        toast.error('❌ Delete failed: ' + error.message);
+        return;
+      }
       toast.success('Assignment removed');
     } else {
-      await supabase.from('teacher_classes').insert({
-        teacher_id: teacherId,
-        class_id: classId.toString(),
-      });
+      const { error } = await supabase
+        .from('teacher_classes')
+        .insert({
+          teacher_id: teacherId,
+          class_id: classId.toString(),
+        });
+
+      if (error) {
+        console.error('Insert error:', error);
+        toast.error('❌ Insert failed: ' + error.message);
+        return;
+      }
       toast.success('Assignment added');
     }
-    fetchData();
+
+    await fetchData();
   }
 
   if (loading) return <div>Loading...</div>;
@@ -93,22 +116,27 @@ export default function TeacherAssignmentsTab() {
       <div className="bg-white border rounded-lg overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b">
+            {shouldShowGroupRow && (
+              <tr>
+                <th className="p-3 text-left min-w-[150px] sticky left-0 bg-gray-50"></th>
+                {groupedClassesArray.map((group) => (
+                  <th
+                    key={group.levelName}
+                    colSpan={group.classes.length}
+                    className="p-2 text-center text-xs font-semibold text-gray-600 border-l border-gray-200 bg-gray-100"
+                  >
+                    {group.levelName}
+                  </th>
+                ))}
+              </tr>
+            )}
             <tr>
               <th className="p-3 text-left min-w-[150px] sticky left-0 bg-gray-50">Teacher</th>
-              {groupedClassesArray.map((group) => (
-                <th
-                  key={group.levelName}
-                  colSpan={group.classes.length}
-                  className="p-2 text-center text-xs font-semibold text-gray-600 border-l border-gray-200 bg-gray-100"
-                >
-                  {group.levelName}
-                </th>
-              ))}
-            </tr>
-            <tr>
-              <th className="p-3 sticky left-0 bg-gray-50"></th>
               {flattenedClasses.map(c => (
-                <th key={c.id} className="p-2 text-center font-medium text-gray-700 border-l border-gray-200 min-w-[70px]">
+                <th
+                  key={c.id}
+                  className="p-2 text-center font-medium text-gray-700 border-l border-gray-200 min-w-[70px]"
+                >
                   {c.name}
                 </th>
               ))}
