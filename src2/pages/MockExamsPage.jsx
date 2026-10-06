@@ -1,8 +1,9 @@
 // src/pages/MockExamsPage.jsx
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Plus, Eye, Save } from 'lucide-react';
+import { Plus, Eye, Save, Printer, Users } from 'lucide-react';
 import { CanAct, CanSee } from '../components/PermissionGate';
+import { generateMockReportCard } from '../lib/mockReportCardGenerator';
 
 const MOCK_NAMES = ['Mock 1', 'Mock 2', 'Mock 3'];
 const ACADEMIC_YEARS = ['2024/2025', '2025/2026', '2026/2027'];
@@ -21,6 +22,7 @@ export default function MockExamsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [showCreateMock, setShowCreateMock] = useState(false);
+  const [schoolConfig, setSchoolConfig] = useState({ school_name: '', address: '', phone: '', email: '', logo: null });
   const [newMockForm, setNewMockForm] = useState({
     name: 'Mock 1',
     academic_year: '2025/2026',
@@ -29,7 +31,7 @@ export default function MockExamsPage() {
 
   useEffect(() => {
     fetchMocks();
-    // Correction : récupération des classes JHS via la relation levels
+
     supabase.from('classes')
       .select('id, name, levels(name)')
       .order('name')
@@ -37,6 +39,19 @@ export default function MockExamsPage() {
         const jhsClasses = (data || []).filter(c => c.levels?.name?.startsWith('JHS'));
         setClasses(jhsClasses);
       });
+
+    // ✅ Charge la config école
+    supabase.from('app_settings').select('*').then(({ data }) => {
+      const cfg = {};
+      (data || []).forEach(d => { cfg[d.key] = d.value; });
+      setSchoolConfig({
+        school_name: cfg.school_name || '',
+        address: cfg.address || '',
+        phone: cfg.phone || '',
+        email: cfg.email || '',
+        logo: cfg.logo || null,
+      });
+    });
   }, []);
 
   const fetchMocks = async () => {
@@ -150,6 +165,31 @@ export default function MockExamsPage() {
     setSaving(false);
   };
 
+  // ✅ NOUVEAU : Imprimer les bulletins de toute la classe
+  const handlePrintClassReports = async () => {
+    if (!selectedMock || !selectedClass) {
+      setMessage('Please select a mock and a class first.');
+      return;
+    }
+    await generateMockReportCard({
+      mockExamId: selectedMock,
+      classId: selectedClass,
+      studentId: null,
+      schoolConfig,
+    });
+  };
+
+  // ✅ NOUVEAU : Imprimer le bulletin d'un seul élève
+  const handlePrintOneReport = async (studentId) => {
+    if (!selectedMock || !selectedClass) return;
+    await generateMockReportCard({
+      mockExamId: selectedMock,
+      classId: selectedClass,
+      studentId,
+      schoolConfig,
+    });
+  };
+
   const selectedSubjectName = classSubjects.find(cs => cs.id === selectedSubject)?.subjects?.name || 'Subject';
   const selectedClassName = classes.find(c => c.id === selectedClass)?.name || '';
 
@@ -204,6 +244,17 @@ export default function MockExamsPage() {
             <Save size={16} /> {saving ? 'Saving...' : 'Save Scores'}
           </button>
         </CanAct>
+
+        {/* ✅ NOUVEAU : Print Class Reports */}
+        <CanAct module="mock-exams" section="buttons" element="Print Class Reports">
+          <button
+            onClick={handlePrintClassReports}
+            disabled={!selectedMock || !selectedClass}
+            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50"
+          >
+            <Users size={16} /> Print Class Reports
+          </button>
+        </CanAct>
       </div>
 
       {/* Tableau de saisie */}
@@ -223,6 +274,7 @@ export default function MockExamsPage() {
                   <th className="text-left px-4 py-3">#</th>
                   <th className="text-left px-4 py-3">Student</th>
                   <th className="text-center px-4 py-3">Score (/100)</th>
+                  <th className="text-center px-4 py-3">Report</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -241,6 +293,17 @@ export default function MockExamsPage() {
                           onChange={e => handleScoreChange(s.id, e.target.value)}
                           className="w-20 text-center border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
                         />
+                      </CanAct>
+                    </td>
+                    <td className="px-4 py-2 text-center">
+                      <CanAct module="mock-exams" section="table" element="Print Report button">
+                        <button
+                          onClick={() => handlePrintOneReport(s.id)}
+                          className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                          title="Print this student's mock report"
+                        >
+                          🖨️
+                        </button>
                       </CanAct>
                     </td>
                   </tr>
